@@ -1,0 +1,1244 @@
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+import {
+  initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
+  collection, getDocs, doc, setDoc, deleteDoc, updateDoc
+} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+
+const firebaseConfig = {
+  apiKey: "AIzaSyD9DdWpxv8OKmF6hpuNwDlLlfpbOx3riAE",
+  authDomain: "financial-asistent.firebaseapp.com",
+  projectId: "financial-asistent",
+  storageBucket: "financial-asistent.firebasestorage.app",
+  messagingSenderId: "702605526775",
+  appId: "1:702605526775:web:150d4038df8aa053dfb5f2"
+};
+
+const fbApp = initializeApp(firebaseConfig);
+// Кэш в IndexedDB: чтение работает офлайн, записи уходят при появлении сети
+const db = initializeFirestore(fbApp, {
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+});
+
+// Новые коллекции с префиксом v2_ — старый ФинДиректор не затрагивается
+const COL = {
+  profiles: 'v2_profiles',
+  wallets:  'v2_wallets',
+  cats:     'v2_cats',
+  ops:      'v2_ops',
+  budgets:  'v2_budgets',
+};
+
+// Ответ сервера не ждём: id генерируем локально, Firestore досылает сам
+const onErr = e => console.warn('sync:', e);
+function fbAdd(col, data){ const r = doc(collection(db, col)); setDoc(r, data).catch(onErr); return r.id; }
+function fbSet(col, id, data){ setDoc(doc(db, col, id), data).catch(onErr); }
+function fbUpd(col, id, patch){ updateDoc(doc(db, col, id), patch).catch(onErr); }
+function fbDel(col, id){ deleteDoc(doc(db, col, id)).catch(onErr); }
+
+// ============ справочники ============
+
+const MONTHS = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+const MONTHS_GEN = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
+const DOW = ['воскресенье','понедельник','вторник','среда','четверг','пятница','суббота'];
+
+const CURRENCIES = [
+  {code:'KZT', sign:'₸', name:'Казахстанский тенге'},
+  {code:'USD', sign:'$', name:'Доллар США'},
+  {code:'EUR', sign:'€', name:'Евро'},
+  {code:'RUB', sign:'₽', name:'Российский рубль'},
+  {code:'KGS', sign:'с', name:'Киргизский сом'},
+];
+
+const PALETTE = ['#5ac8fa','#5e5ce6','#ff6b35','#3b46d4','#ff9ecd','#4a5ae8','#a4d233','#32ade6',
+  '#ff453a','#30d158','#af52de','#ffd60a','#ff9f0a','#64d2ff','#bf5af2','#8e8e93'];
+
+const ICONS = ['🛒','🏠','🧾','👑','🥤','🚕','🍔','🧳','📱','💊','🚗','⛽','👔','🪥','🎁','💳','🕌','🎉',
+  '🍖','📚','🎮','🚨','💕','💼','☕','🅿️','🛁','🔨','💰','🎖','💹','🏝','💻','👛','🏦','🕵️','✈️','🐣'];
+
+// Стандартные категории расходов. sub — подкатегории, создаются вместе с родителем.
+const DEF_EXP = [
+  {n:'Продукты',       i:'🛒', c:'#5ac8fa', sub:['Мясо','Овощи и фрукты','Вода','Хозтовары']},
+  {n:'Все для дома',   i:'🏠', c:'#5e5ce6', sub:['Ремонт','Мебель','Бытовое']},
+  {n:'Коммуслуги',     i:'🧾', c:'#ff6b35', sub:['Свет','Газ','Вода','Интернет','Аренда']},
+  {n:'Семья',          i:'👑', c:'#3b46d4', sub:['Али','Мама','Ата','Родные']},
+  {n:'Еда',            i:'🍔', c:'#a4d233', sub:['Кафе','Обед','Доставка','Фастфуд']},
+  {n:'Напитки',        i:'🥤', c:'#ff9ecd', sub:['Кофе','Вода','Газировка']},
+  {n:'Транспорт',      i:'🚕', c:'#4a5ae8', sub:['Такси','Парковка','Автобус']},
+  {n:'Авто',           i:'🚗', c:'#ff453a', sub:['Ремонт','Мойка','Страховка','Техосмотр']},
+  {n:'Бензин',         i:'⛽', c:'#32ade6', sub:[]},
+  {n:'Тарифы',         i:'📱', c:'#1e4fd8', sub:['Связь','Подписки']},
+  {n:'Здоровье',       i:'💊', c:'#ff3b30', sub:['Аптека','Врач','Стоматолог']},
+  {n:'Одежда',         i:'👔', c:'#ffd60a', sub:[]},
+  {n:'Гигиена',        i:'🪥', c:'#30d158', sub:['Стрижка']},
+  {n:'Подарки',        i:'🎁', c:'#ff9ecd', sub:['Коримдік','Сүйінші']},
+  {n:'Кредиты',        i:'💳', c:'#ff453a', sub:['Каспи','Халык','Рассрочка']},
+  {n:'Пожертвования',  i:'🕌', c:'#a4d233', sub:[]},
+  {n:'Праздники',      i:'🎉', c:'#bf5af2', sub:['Той','День рождения']},
+  {n:'Ас',             i:'🍖', c:'#ff6b35', sub:['Дастархан','Қонақасы']},
+  {n:'Образование',    i:'📚', c:'#64d2ff', sub:['Книги','Курсы']},
+  {n:'Развлечения',    i:'🎮', c:'#af52de', sub:['Кино','Спорт']},
+  {n:'Спа/Баня',       i:'🛁', c:'#64d2ff', sub:[]},
+  {n:'Девушка',        i:'💕', c:'#ff9ecd', sub:[]},
+  {n:'Штрафы',         i:'🚨', c:'#ff453a', sub:[]},
+  {n:'Прочее',         i:'💼', c:'#8e8e93', sub:[]},
+];
+
+const DEF_INC = [
+  {n:'Зарплата',  i:'💰', c:'#a4d233', sub:['Аванс','Основная']},
+  {n:'Премия',    i:'🎖', c:'#ff2d55', sub:[]},
+  {n:'Отпускные', i:'🏝', c:'#3b46d4', sub:[]},
+  {n:'Проценты',  i:'💹', c:'#ff6b35', sub:[]},
+  {n:'Фриланс',   i:'💻', c:'#5ac8fa', sub:[]},
+  {n:'Подарок',   i:'🎁', c:'#bf5af2', sub:[]},
+  {n:'Прочее',    i:'💵', c:'#8e8e93', sub:[]},
+];
+
+const DEF_WALLETS = [
+  {n:'Наличные',      i:'👛', c:'#5ac8fa', kind:'normal'},
+  {n:'Каспи голд',    i:'💳', c:'#ff6b35', kind:'normal'},
+  {n:'Каспи депозит', i:'🏦', c:'#ff2d55', kind:'normal'},
+  {n:'Долги',         i:'🕵️', c:'#af52de', kind:'debt'},
+];
+
+// ============ состояние ============
+
+const today = new Date();
+const LS = {
+  get(k, d){ try { return JSON.parse(localStorage.getItem('fin2_'+k)) ?? d; } catch { return d; } },
+  set(k, v){ try { localStorage.setItem('fin2_'+k, JSON.stringify(v)); } catch {} },
+};
+
+let S = {
+  ready:false, syncing:false,
+  tab:'panel',                       // panel | history | report | settings
+  month:today.getMonth(), year:today.getFullYear(),
+  profiles:[], wallets:[], cats:[], ops:[], budgets:{},
+  profileId: LS.get('profile', null),
+  mainCurrency: LS.get('currency', 'KZT'),
+  rates: LS.get('rates', {USD:540, EUR:590, RUB:6.5, KGS:6.2}),
+  open: LS.get('open', {income:true, wallets:true, expense:true}),
+  showDebt: LS.get('showDebt', true),
+  search:'',
+  reportKind:'expense',              // expense | income | both
+  sheet:null,                        // {mode, ...}
+  monthPicker:false,
+};
+
+function setS(patch){ Object.assign(S, typeof patch === 'function' ? patch(S) : patch); render(); }
+
+// ============ утилиты ============
+
+const fmt = n => new Intl.NumberFormat('ru-RU').format(Math.round(Number(n)||0));
+const sign = code => (CURRENCIES.find(c=>c.code===code)||CURRENCIES[0]).sign;
+const mainSign = () => sign(S.mainCurrency);
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+const mkOf = d => `${d.getFullYear()}-${d.getMonth()}`;
+const curMk = () => `${S.year}-${S.month}`;
+const esc = s => String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+function localInput(d){
+  const p = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function toKZT(amount, currency){
+  if(currency === S.mainCurrency) return amount;
+  const r = currency === S.mainCurrency ? 1 : (S.rates[currency] || 1);
+  return amount * r;
+}
+
+// ============ выборки ============
+
+const profile = () => S.profiles.find(p=>p.id===S.profileId) || S.profiles[0] || null;
+const myWallets = () => S.wallets.filter(w=>w.profileId===S.profileId);
+const wallet = id => S.wallets.find(w=>w.id===id);
+const cat = id => S.cats.find(c=>c.id===id);
+const parents = type => S.cats.filter(c=>c.profileId===S.profileId && c.type===type && !c.parentId)
+  .sort((a,b)=>(a.order||0)-(b.order||0));
+const childrenOf = pid => S.cats.filter(c=>c.parentId===pid).sort((a,b)=>(a.order||0)-(b.order||0));
+
+const monthOps = (mkey = curMk()) =>
+  S.ops.filter(o => o.profileId===S.profileId && o.monthKey===mkey);
+
+function walletBalance(id){
+  const w = wallet(id);
+  if(!w) return 0;
+  let bal = Number(w.initialBalance) || 0;
+  for(const o of S.ops){
+    if(o.type === 'expense' && o.walletId === id) bal -= o.amount;
+    else if(o.type === 'income' && o.walletId === id) bal += o.amount;
+    else if(o.type === 'transfer'){
+      if(o.walletId === id) bal -= o.amount;
+      if(o.toWalletId === id) bal += (o.amountTo ?? o.amount);
+    }
+  }
+  return bal;
+}
+
+// Сумма по родительской категории — вместе со всеми подкатегориями
+function catTotals(type, mkey = curMk()){
+  const out = {};
+  for(const o of monthOps(mkey)){
+    if(o.type !== type) continue;
+    const c = cat(o.catId);
+    const rootId = c ? (c.parentId || c.id) : o.catId;
+    out[rootId] = (out[rootId] || 0) + o.amount;
+  }
+  return out;
+}
+const sumOf = (type, mkey = curMk()) =>
+  monthOps(mkey).filter(o=>o.type===type).reduce((s,o)=>s+o.amount, 0);
+
+function dayFactor(){
+  const now = new Date();
+  if(S.year === now.getFullYear() && S.month === now.getMonth()) return now.getDate();
+  return new Date(S.year, S.month+1, 0).getDate();
+}
+
+// ============ загрузка и посев ============
+
+async function loadAll(){
+  const [pSnap, wSnap, cSnap, oSnap, bSnap] = await Promise.all([
+    getDocs(collection(db, COL.profiles)),
+    getDocs(collection(db, COL.wallets)),
+    getDocs(collection(db, COL.cats)),
+    getDocs(collection(db, COL.ops)),
+    getDocs(collection(db, COL.budgets)),
+  ]);
+  const pick = snap => { const a=[]; snap.forEach(d=>a.push({...d.data(), id:d.id})); return a; };
+  S.profiles = pick(pSnap).sort((a,b)=>(a.order||0)-(b.order||0));
+  S.wallets  = pick(wSnap).sort((a,b)=>(a.order||0)-(b.order||0));
+  S.cats     = pick(cSnap);
+  S.ops      = pick(oSnap).sort((a,b)=> new Date(b.date) - new Date(a.date));
+  S.budgets  = {};
+  bSnap.forEach(d => { S.budgets[d.id] = d.data().amount || 0; });
+
+  if(!S.profiles.length) seedProfile('Личный', 'Л');
+  if(!S.profiles.some(p=>p.id===S.profileId)) S.profileId = S.profiles[0].id;
+  LS.set('profile', S.profileId);
+}
+
+function seedProfile(name, icon){
+  const pid = uid();
+  const p = {id:pid, name, icon, order:S.profiles.length};
+  fbSet(COL.profiles, pid, {name, icon, order:p.order});
+  S.profiles = [...S.profiles, p];
+
+  DEF_WALLETS.forEach((w, i) => {
+    const id = uid();
+    const data = {profileId:pid, name:w.n, icon:w.i, color:w.c, currency:S.mainCurrency,
+      initialBalance:0, kind:w.kind, order:i};
+    fbSet(COL.wallets, id, data);
+    S.wallets.push({...data, id});
+  });
+
+  const seedCats = (list, type) => list.forEach((c, i) => {
+    const id = uid();
+    const data = {profileId:pid, type, name:c.n, icon:c.i, color:c.c, parentId:null, order:i};
+    fbSet(COL.cats, id, data);
+    S.cats.push({...data, id});
+    c.sub.forEach((sn, j) => {
+      const sid = uid();
+      const sd = {profileId:pid, type, name:sn, icon:c.i, color:c.c, parentId:id, order:j};
+      fbSet(COL.cats, sid, sd);
+      S.cats.push({...sd, id:sid});
+    });
+  });
+  seedCats(DEF_EXP, 'expense');
+  seedCats(DEF_INC, 'income');
+  return pid;
+}
+
+// ============ операции ============
+
+function saveOp(data, id){
+  const d = new Date(data.date);
+  const body = {...data, monthKey: mkOf(d), profileId: S.profileId};
+  if(id){
+    fbUpd(COL.ops, id, body);
+    S.ops = S.ops.map(o => o.id===id ? {...o, ...body} : o);
+  } else {
+    const nid = fbAdd(COL.ops, body);
+    S.ops = [{...body, id:nid}, ...S.ops];
+  }
+  S.ops.sort((a,b)=> new Date(b.date) - new Date(a.date));
+}
+function deleteOp(id){
+  fbDel(COL.ops, id);
+  S.ops = S.ops.filter(o => o.id !== id);
+}
+function setBudget(catId, amount){
+  const key = `${S.profileId}__${catId}`;
+  if(amount > 0){ fbSet(COL.budgets, key, {amount, profileId:S.profileId, catId}); S.budgets[key] = amount; }
+  else { fbDel(COL.budgets, key); delete S.budgets[key]; }
+}
+const budgetOf = catId => S.budgets[`${S.profileId}__${catId}`] || 0;
+// ==================== ПАНЕЛЬ ====================
+
+function tileHTML(id, name, icon, color, value, kind){
+  const zero = !value;
+  return `<button class="tile" data-tile="${kind}" data-id="${id}">
+    <div class="tile-name">${esc(name)}</div>
+    <div class="tile-icon" style="background:${color}">${icon}</div>
+    <div class="tile-val${zero?' zero':''}">${fmt(value)} ${mainSign()}</div>
+  </button>`;
+}
+
+function sectionHTML(key, title, sum, tiles, extra=''){
+  const open = S.open[key];
+  return `
+  <div class="sec-head">
+    <button class="sec-name" data-toggle="${key}">
+      <span class="chev${open?'':' closed'}">▾</span>${title}
+    </button>
+    <span class="sec-sum">${extra}${fmt(sum)} ${mainSign()}</span>
+  </div>
+  ${open ? `<div class="tile-box"><div class="tiles">${tiles}</div></div>` : ''}`;
+}
+
+function viewPanel(){
+  const p = profile();
+  const incTot = catTotals('income'), expTot = catTotals('expense');
+
+  const incTiles = parents('income')
+    .map(c => tileHTML(c.id, c.name, c.icon, c.color, incTot[c.id]||0, 'cat')).join('');
+  const expTiles = parents('expense')
+    .map(c => tileHTML(c.id, c.name, c.icon, c.color, expTot[c.id]||0, 'cat')).join('');
+
+  const ws = myWallets().filter(w => S.showDebt || w.kind !== 'debt');
+  const walTiles = ws.map(w =>
+    tileHTML(w.id, w.name, w.icon, w.color, walletBalance(w.id), 'wallet')).join('');
+
+  // Долги — это обязательства, а не деньги в кармане, поэтому в итог не идут
+  const walTotal = myWallets()
+    .filter(w => w.kind !== 'debt')
+    .reduce((s,w) => s + toKZT(walletBalance(w.id), w.currency), 0);
+
+  return `
+  <div class="top">
+    <button class="avatar" id="profileBtn">${esc(p ? p.icon : '·')}</button>
+    <button class="month-btn" id="monthBtn">${MONTHS[S.month].toUpperCase()} ▾</button>
+    <button class="round-btn" data-go-tab="settings">•••</button>
+  </div>
+  <div class="wrap">
+    ${sectionHTML('income','Доходы', sumOf('income'), incTiles)}
+    ${sectionHTML('wallets','Кошельки', walTotal, walTiles)}
+    ${sectionHTML('expense','Расходы', sumOf('expense'), expTiles)}
+    ${!parents('expense').length ? '<div class="empty">Категорий пока нет.<br>Добавьте их в настройках.</div>' : ''}
+  </div>`;
+}
+
+// ==================== ИСТОРИЯ ====================
+
+function opTitle(o){
+  if(o.type === 'transfer'){
+    const a = wallet(o.walletId), b = wallet(o.toWalletId);
+    return `${a?a.name:'—'} → ${b?b.name:'—'}`;
+  }
+  const c = cat(o.catId);
+  if(!c) return 'Без категории';
+  if(c.parentId){
+    const p = cat(c.parentId);
+    return `${p?p.name:'—'} / ${c.name}`;
+  }
+  return c.name;
+}
+function opVisual(o){
+  if(o.type === 'transfer') return {icon:'↔️', color:'#8e8e93'};
+  const c = cat(o.catId);
+  if(!c) return {icon:'💼', color:'#8e8e93'};
+  return {icon:c.icon, color:c.color};
+}
+
+function viewHistory(){
+  const q = S.search.trim().toLowerCase();
+  let list = monthOps();
+  if(q) list = list.filter(o =>
+    (o.note||'').toLowerCase().includes(q) ||
+    opTitle(o).toLowerCase().includes(q) ||
+    String(o.amount).includes(q));
+
+  const inc = sumOf('income'), exp = sumOf('expense'), saldo = inc - exp;
+
+  // группировка по дням
+  const byDay = {};
+  for(const o of list){
+    const d = new Date(o.date);
+    const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+    (byDay[key] = byDay[key] || []).push(o);
+  }
+  const dayKeys = Object.keys(byDay).sort((a,b)=>{
+    const [ay,am,ad]=a.split('-').map(Number), [by,bm,bd]=b.split('-').map(Number);
+    return new Date(by,bm,bd) - new Date(ay,am,ad);
+  });
+
+  const days = dayKeys.map(k => {
+    const [y,m,dd] = k.split('-').map(Number);
+    const d = new Date(y,m,dd);
+    const ops = byDay[k];
+    const net = ops.reduce((s,o)=> s + (o.type==='income' ? o.amount : o.type==='expense' ? -o.amount : 0), 0);
+    return `
+    <div class="day-head">
+      <span>${dd} ${MONTHS_GEN[m]} ${y}, ${DOW[d.getDay()]}</span>
+      <span style="color:${net>=0?'var(--green)':'var(--text)'}">${net>0?'+':''}${fmt(net)} ${mainSign()}</span>
+    </div>
+    ${ops.map(o => {
+      const v = opVisual(o);
+      const w = wallet(o.walletId);
+      const col = o.type==='income' ? 'var(--green)' : o.type==='transfer' ? 'var(--muted)' : 'var(--text)';
+      const pre = o.type==='income' ? '+' : o.type==='expense' ? '−' : '';
+      return `<button class="op" data-edit-op="${o.id}">
+        <div class="op-icon" style="background:${v.color}">${v.icon}</div>
+        <div class="op-main">
+          <div class="op-title">${esc(opTitle(o))}</div>
+          ${o.type!=='transfer' && w ? `<div class="op-wallet">${esc(w.name)}</div>` : ''}
+          ${o.note ? `<div class="op-note">${esc(o.note)}</div>` : ''}
+        </div>
+        <div class="op-amt" style="color:${col}">${pre}${fmt(o.amount)} ${mainSign()}</div>
+      </button>`;
+    }).join('')}`;
+  }).join('');
+
+  return `
+  <div class="top">
+    <span style="width:48px"></span>
+    <button class="month-btn" id="monthBtn">${MONTHS[S.month]} ${S.year} ▾</button>
+    <span style="width:48px"></span>
+  </div>
+  <div class="wrap">
+    <div class="search">
+      <span style="color:var(--muted)">🔍</span>
+      <input id="searchInp" placeholder="Поиск по операциям" value="${esc(S.search)}"/>
+      ${S.search ? '<button id="clearSearch" style="color:var(--muted)">✕</button>' : ''}
+    </div>
+    <div class="big-sum">
+      <div class="l">сальдо</div>
+      <div class="v" style="color:${saldo>=0?'var(--green)':'var(--text)'}">${saldo>0?'+':''}${fmt(saldo)} ${mainSign()}</div>
+    </div>
+    <div class="duo">
+      <div class="duo-box"><div class="duo-l">Поступления</div>
+        <div class="duo-v" style="color:var(--green)">${fmt(inc)} ${mainSign()}</div></div>
+      <div class="duo-box"><div class="duo-l">Списания</div>
+        <div class="duo-v" style="color:var(--red)">${fmt(exp)} ${mainSign()}</div></div>
+    </div>
+    <div style="font-size:22px;font-weight:800;margin-bottom:10px">Список операций</div>
+    ${list.length ? days : `<div class="empty">${q ? 'Ничего не нашлось' : 'За этот месяц операций нет.<br>Нажмите + чтобы добавить первую.'}</div>`}
+  </div>`;
+}
+
+// ==================== ОТЧЁТ ====================
+
+function donut(slices, total){
+  if(!total) return '<div class="empty">Нет данных за месяц</div>';
+  const R = 90, r = 52, cx = 110, cy = 110;
+  let angle = -Math.PI/2;
+  const paths = slices.map(s => {
+    const frac = s.value / total;
+    const a2 = angle + frac * Math.PI * 2;
+    const big = frac > .5 ? 1 : 0;
+    const pt = (rad, a) => `${(cx + rad*Math.cos(a)).toFixed(2)} ${(cy + rad*Math.sin(a)).toFixed(2)}`;
+    // полный круг нельзя нарисовать одной дугой — рисуем кольцо целиком
+    const d = frac > .999
+      ? `M ${cx-R} ${cy} A ${R} ${R} 0 1 1 ${cx+R} ${cy} A ${R} ${R} 0 1 1 ${cx-R} ${cy} Z
+         M ${cx-r} ${cy} A ${r} ${r} 0 1 0 ${cx+r} ${cy} A ${r} ${r} 0 1 0 ${cx-r} ${cy} Z`
+      : `M ${pt(R,angle)} A ${R} ${R} 0 ${big} 1 ${pt(R,a2)} L ${pt(r,a2)} A ${r} ${r} 0 ${big} 0 ${pt(r,angle)} Z`;
+    const mid = angle + frac*Math.PI;
+    const label = frac > .06
+      ? `<text x="${(cx + 71*Math.cos(mid)).toFixed(1)}" y="${(cy + 71*Math.sin(mid)).toFixed(1)}"
+           text-anchor="middle" dominant-baseline="central" fill="#fff"
+           font-size="12" font-weight="700">${(frac*100).toFixed(1).replace('.',',')}%</text>` : '';
+    angle = a2;
+    return `<path d="${d}" fill="${s.color}" fill-rule="evenodd"/>${label}`;
+  }).join('');
+  return `<svg viewBox="0 0 220 220" width="100%" style="max-width:280px;display:block;margin:8px auto 18px">${paths}</svg>`;
+}
+
+function viewReport(){
+  const kind = S.reportKind;
+  const days = dayFactor();
+
+  const build = type => {
+    const totals = catTotals(type);
+    const sum = sumOf(type);
+    const items = parents(type)
+      .filter(c => totals[c.id])
+      .map(c => ({id:c.id, name:c.name, color:c.color, icon:c.icon, value:totals[c.id]}))
+      .sort((a,b)=> b.value - a.value);
+    return {items, sum};
+  };
+
+  const primary = kind === 'income' ? build('income') : build('expense');
+  const label = kind === 'income' ? 'Доходы' : 'Расходы';
+  const budgetSum = parents('expense').reduce((s,c)=> s + budgetOf(c.id), 0);
+
+  let body;
+  if(kind === 'both'){
+    const inc = build('income'), exp = build('expense');
+    const max = Math.max(inc.sum, exp.sum, 1);
+    body = `
+    <div class="card">
+      <div style="margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;font-size:15px">
+          <span>Доходы</span><span style="color:var(--green);font-weight:700">${fmt(inc.sum)} ${mainSign()}</span>
+        </div>
+        <div class="bar"><div class="bar-fill" style="width:${inc.sum/max*100}%;background:var(--green)"></div></div>
+      </div>
+      <div>
+        <div style="display:flex;justify-content:space-between;font-size:15px">
+          <span>Расходы</span><span style="color:var(--red);font-weight:700">${fmt(exp.sum)} ${mainSign()}</span>
+        </div>
+        <div class="bar"><div class="bar-fill" style="width:${exp.sum/max*100}%;background:var(--red)"></div></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:18px;padding-top:14px;
+        border-top:.5px solid var(--line);font-size:16px;font-weight:700">
+        <span>Сальдо</span>
+        <span style="color:${inc.sum-exp.sum>=0?'var(--green)':'var(--red)'}">
+          ${inc.sum-exp.sum>0?'+':''}${fmt(inc.sum-exp.sum)} ${mainSign()}</span>
+      </div>
+    </div>`;
+  } else {
+    body = `
+    ${donut(primary.items, primary.sum)}
+    <div class="stat-3">
+      <div><div class="stat-l">Бюджет</div><div class="stat-v">${kind==='expense'?fmt(budgetSum):'—'} ${kind==='expense'?mainSign():''}</div></div>
+      <div><div class="stat-l">${label}</div>
+        <div class="stat-v" style="color:${kind==='income'?'var(--green)':'var(--red)'}">${fmt(primary.sum)} ${mainSign()}</div></div>
+      <div><div class="stat-l">~ в день</div><div class="stat-v">${fmt(primary.sum/days)} ${mainSign()}</div></div>
+    </div>
+    <div class="card">
+      <div style="font-size:19px;font-weight:800;margin-bottom:6px">${label} по категориям</div>
+      ${primary.items.length ? primary.items.map(it => {
+        const pct = primary.sum ? it.value/primary.sum*100 : 0;
+        const bud = kind==='expense' ? budgetOf(it.id) : 0;
+        const over = bud && it.value > bud;
+        return `<div class="legend" style="display:block">
+          <div style="display:flex;align-items:center;gap:10px">
+            <div class="legend-dot" style="background:${it.color}"></div>
+            <div style="flex:1;font-size:15px">${it.icon} ${esc(it.name)}</div>
+            <div style="font-weight:700;font-size:15px">${fmt(it.value)} ${mainSign()}</div>
+            <div style="color:var(--muted);font-size:13px;width:46px;text-align:right">${pct.toFixed(1)}%</div>
+          </div>
+          <div class="bar"><div class="bar-fill" style="width:${pct}%;background:${it.color}"></div></div>
+          ${kind==='expense' ? `<div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+            <span style="font-size:12px;color:${over?'var(--red)':'var(--muted)'}">
+              ${bud ? (over ? `превышен на ${fmt(it.value-bud)}` : `из ${fmt(bud)} ${mainSign()}`) : 'лимит не задан'}</span>
+            <input class="inp budget-inp" data-cat="${it.id}" type="number" inputmode="decimal"
+              placeholder="лимит" value="${bud||''}"
+              style="margin-left:auto;width:110px;padding:7px 10px;font-size:13px;text-align:right"/>
+          </div>` : ''}
+        </div>`;
+      }).join('') : '<div class="empty">Нет операций за месяц</div>'}
+    </div>`;
+  }
+
+  return `
+  <div class="screen-title">Отчёт</div>
+  <div class="wrap">
+    <div class="seg">
+      <button class="${kind==='income'?'on':''}" data-report="income">Доходы</button>
+      <button class="${kind==='expense'?'on':''}" data-report="expense">Расходы</button>
+      <button class="${kind==='both'?'on':''}" data-report="both">Вместе</button>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:center;gap:18px;margin-bottom:16px">
+      <button id="prevMonth" style="color:var(--muted);font-size:22px;padding:4px 10px">‹</button>
+      <button class="month-btn" id="monthBtn">${MONTHS[S.month]} ${S.year} ▾</button>
+      <button id="nextMonth" style="color:var(--muted);font-size:22px;padding:4px 10px">›</button>
+    </div>
+    ${body}
+  </div>`;
+}
+// ==================== НАСТРОЙКИ ====================
+
+function viewSettings(){
+  const p = profile();
+  const cur = CURRENCIES.find(c=>c.code===S.mainCurrency) || CURRENCIES[0];
+  const ws = myWallets();
+
+  return `
+  <div class="screen-title">Настройки</div>
+  <div class="wrap">
+    <div class="card" style="padding:0 16px">
+      <button class="row" style="width:100%" data-sheet="profiles">
+        <div class="row-main">
+          <div class="row-title">Профили</div>
+          <div class="row-sub">Сейчас: ${esc(p?p.name:'—')}. Отдельный учёт для личного и рабочего.</div>
+        </div><span class="row-go">›</span>
+      </button>
+      <button class="row" style="width:100%" data-sheet="currency">
+        <div class="row-main">
+          <div class="row-title">Основная валюта</div>
+          <div class="row-sub">${esc(cur.name)}</div>
+        </div><span class="row-go">${cur.sign} ›</span>
+      </button>
+      <div class="row">
+        <div class="row-main">
+          <div class="row-title">Показывать долги</div>
+          <div class="row-sub">Кошелёк с долгами на панели. В итог по кошелькам не входит.</div>
+        </div>
+        <button id="toggleDebt" style="font-size:30px;color:${S.showDebt?'var(--green)':'var(--dim)'}">
+          ${S.showDebt?'◉':'◎'}</button>
+      </div>
+    </div>
+
+    <div class="card" style="padding:0 16px">
+      <button class="row" style="width:100%" data-sheet="wallets">
+        <div class="row-main">
+          <div class="row-title">Кошельки</div>
+          <div class="row-sub">${ws.length} шт. Здесь же правится текущий остаток.</div>
+        </div><span class="row-go">›</span>
+      </button>
+      <button class="row" style="width:100%" data-sheet="cats-expense">
+        <div class="row-main">
+          <div class="row-title">Категории расходов</div>
+          <div class="row-sub">${parents('expense').length} основных, ${S.cats.filter(c=>c.profileId===S.profileId&&c.type==='expense'&&c.parentId).length} подкатегорий</div>
+        </div><span class="row-go">›</span>
+      </button>
+      <button class="row" style="width:100%" data-sheet="cats-income">
+        <div class="row-main">
+          <div class="row-title">Категории доходов</div>
+          <div class="row-sub">${parents('income').length} основных</div>
+        </div><span class="row-go">›</span>
+      </button>
+    </div>
+
+    <div class="card" style="padding:0 16px">
+      <button class="row" style="width:100%" id="exportCsv">
+        <div class="row-main">
+          <div class="row-title">Экспорт в CSV</div>
+          <div class="row-sub">Все операции профиля одним файлом для Excel</div>
+        </div><span class="row-go">›</span>
+      </button>
+      <button class="row" style="width:100%" data-sheet="wipe">
+        <div class="row-main">
+          <div class="row-title" style="color:var(--red)">Удалить данные</div>
+          <div class="row-sub">Стереть операции и начать учёт заново</div>
+        </div><span class="row-go">›</span>
+      </button>
+    </div>
+
+    <div style="text-align:center;color:var(--dim);font-size:13px;padding:8px 0 20px">
+      ФинДиректор 2 · операций в базе: ${S.ops.filter(o=>o.profileId===S.profileId).length}
+    </div>
+  </div>`;
+}
+
+// ==================== НИЖНИЕ ЛИСТЫ ====================
+
+function sheetWrap(title, inner, extraHead=''){
+  return `<div class="sheet-bg" id="sheetBg"><div class="sheet" id="sheetBody">
+    <div class="grabber"></div>
+    <div class="sheet-head">
+      <div class="sheet-title">${title}</div>
+      <div style="display:flex;align-items:center;gap:6px">${extraHead}<button class="x" id="closeSheet">✕</button></div>
+    </div>
+    ${inner}
+  </div></div>`;
+}
+
+// ---- лист операции ----
+function sheetOp(){
+  const s = S.sheet;
+  const type = s.type;
+  const ws = myWallets();
+  const isTransfer = type === 'transfer';
+
+  const roots = parents(type === 'income' ? 'income' : 'expense');
+  const chosen = s.catId ? cat(s.catId) : null;
+  const rootId = chosen ? (chosen.parentId || chosen.id) : null;
+  const subs = rootId ? childrenOf(rootId) : [];
+
+  const catGrid = roots.map(c => `
+    <button class="pick${rootId===c.id?' on':''}" data-pick-cat="${c.id}">
+      <div class="pick-ic" style="background:${c.color}">${c.icon}</div>
+      <div class="pick-n">${esc(c.name)}</div>
+    </button>`).join('');
+
+  const subChips = subs.length ? `
+    <div class="field-l" style="margin-top:14px">Уточнение</div>
+    <div class="chips">
+      <button class="chip${s.catId===rootId?' on':''}" data-pick-cat="${rootId}">Без уточнения</button>
+      ${subs.map(sc => `<button class="chip${s.catId===sc.id?' on':''}" data-pick-cat="${sc.id}">${esc(sc.name)}</button>`).join('')}
+    </div>` : '';
+
+  const walletChips = list => list.map(w =>
+    `<button class="chip${s.walletId===w.id?' on':''}" data-pick-wallet="${w.id}">${w.icon} ${esc(w.name)}</button>`).join('');
+
+  return sheetWrap(s.id ? 'Изменить операцию' : 'Новая операция', `
+    <div class="seg">
+      <button class="${type==='expense'?'on':''}" data-op-type="expense">Расход</button>
+      <button class="${type==='income'?'on':''}" data-op-type="income">Доход</button>
+      <button class="${type==='transfer'?'on':''}" data-op-type="transfer">Перевод</button>
+    </div>
+
+    <input class="amount-in" id="opAmt" type="number" inputmode="decimal"
+      placeholder="0" value="${s.amount||''}" autocomplete="off"/>
+
+    ${isTransfer ? `
+      <div class="field-l">Откуда</div>
+      <div class="chips" style="margin-bottom:14px">${walletChips(ws)}</div>
+      <div class="field-l">Куда</div>
+      <div class="chips" style="margin-bottom:14px">
+        ${ws.map(w => `<button class="chip${s.toWalletId===w.id?' on':''}" data-pick-to="${w.id}">${w.icon} ${esc(w.name)}</button>`).join('')}
+      </div>
+      ${(() => {
+        const a = wallet(s.walletId), b = wallet(s.toWalletId);
+        return a && b && a.currency !== b.currency ? `
+          <div class="field-l">Сколько придёт в ${esc(b.name)} (${b.currency})</div>
+          <input class="inp" id="opAmtTo" type="number" inputmode="decimal"
+            placeholder="сумма зачисления" value="${s.amountTo||''}" style="margin-bottom:14px"/>` : '';
+      })()}
+    ` : `
+      <div class="field-l">Категория</div>
+      <div class="pick-grid">${catGrid}</div>
+      ${subChips}
+      <div class="field-l" style="margin-top:14px">Кошелёк</div>
+      <div class="chips" style="margin-bottom:14px">${walletChips(ws)}</div>
+    `}
+
+    <div class="field-l">Примечание</div>
+    <input class="inp" id="opNote" placeholder="необязательно" value="${esc(s.note||'')}" style="margin-bottom:14px"/>
+
+    <div class="field-l">Дата и время</div>
+    <input class="inp" id="opDate" type="datetime-local" value="${s.date}" style="margin-bottom:18px"/>
+
+    <button class="btn" id="saveOp">${s.id ? 'Сохранить' : 'Добавить'}</button>
+    ${s.id ? `<button class="btn danger" id="deleteOp" style="margin-top:8px">Удалить операцию</button>` : ''}
+  `);
+}
+
+// ---- выбор месяца ----
+function sheetMonth(){
+  const years = [S.year-1, S.year, S.year+1];
+  return sheetWrap('Период', `
+    <div class="field-l">Год</div>
+    <div class="chips" style="margin-bottom:18px">
+      ${years.map(y => `<button class="chip${y===S.year?' on':''}" data-pick-year="${y}">${y}</button>`).join('')}
+    </div>
+    <div class="field-l">Месяц</div>
+    <div class="chips">
+      ${MONTHS.map((m,i) => `<button class="chip${i===S.month?' on':''}" data-pick-month="${i}">${m}</button>`).join('')}
+    </div>
+  `);
+}
+
+// ---- профили ----
+function sheetProfiles(){
+  return sheetWrap('Профили', `
+    ${S.profiles.map(p => `
+      <div class="row">
+        <button class="row-main" style="text-align:left" data-use-profile="${p.id}">
+          <div class="row-title">${esc(p.icon)} ${esc(p.name)}${p.id===S.profileId?' ✓':''}</div>
+          <div class="row-sub">${S.ops.filter(o=>o.profileId===p.id).length} операций · ${S.wallets.filter(w=>w.profileId===p.id).length} кошельков</div>
+        </button>
+        ${S.profiles.length>1 ? `<button class="row-go" style="color:var(--red)" data-del-profile="${p.id}">Удалить</button>` : ''}
+      </div>`).join('')}
+    <div class="field-l" style="margin-top:18px">Новый профиль</div>
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <input class="inp" id="npIcon" value="Р" style="width:64px;text-align:center"/>
+      <input class="inp" id="npName" placeholder="Например, Фриланс"/>
+    </div>
+    <button class="btn" id="addProfile">Создать профиль</button>
+    <div style="color:var(--dim);font-size:13px;margin-top:10px;line-height:1.5">
+      У нового профиля будут свои кошельки и категории. Операции между профилями не смешиваются.
+    </div>
+  `);
+}
+
+// ---- валюта ----
+function sheetCurrency(){
+  return sheetWrap('Основная валюта', `
+    ${CURRENCIES.map(c => `
+      <button class="row" style="width:100%" data-pick-currency="${c.code}">
+        <div class="row-main">
+          <div class="row-title">${c.sign} ${c.name}</div>
+          <div class="row-sub">${c.code}</div>
+        </div>
+        <span class="row-go">${c.code===S.mainCurrency?'✓':''}</span>
+      </button>`).join('')}
+    <div class="field-l" style="margin-top:18px">Курсы к основной валюте</div>
+    ${CURRENCIES.filter(c=>c.code!==S.mainCurrency).map(c => `
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+        <span style="width:52px;color:var(--muted);font-size:14px">${c.code}</span>
+        <input class="inp rate-inp" data-rate="${c.code}" type="number" inputmode="decimal"
+          value="${S.rates[c.code]||''}" placeholder="курс"/>
+      </div>`).join('')}
+    <div style="color:var(--dim);font-size:13px;line-height:1.5">
+      Курсы нужны только чтобы свести кошельки в разных валютах в один итог.
+    </div>
+  `);
+}
+
+// ---- кошельки ----
+function sheetWallets(){
+  const ws = myWallets();
+  const e = S.sheet.edit;
+  if(e){
+    return sheetWrap(e.id ? 'Кошелёк' : 'Новый кошелёк', `
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <input class="inp" id="wIcon" value="${esc(e.icon)}" style="width:64px;text-align:center;font-size:22px"/>
+        <input class="inp" id="wName" placeholder="Название" value="${esc(e.name)}"/>
+      </div>
+      <div class="field-l">Валюта</div>
+      <div class="chips" style="margin-bottom:14px">
+        ${CURRENCIES.map(c => `<button class="chip${e.currency===c.code?' on':''}" data-w-cur="${c.code}">${c.code}</button>`).join('')}
+      </div>
+      <div class="field-l">Текущий остаток</div>
+      <input class="inp" id="wBal" type="number" inputmode="decimal" value="${e.displayBalance}" style="margin-bottom:8px"/>
+      <div style="color:var(--dim);font-size:13px;margin-bottom:14px;line-height:1.5">
+        Впишите реальную сумму на счёте. Разницу с посчитанной по операциям приложение запомнит как стартовый остаток.
+      </div>
+      <div class="field-l">Тип</div>
+      <div class="chips" style="margin-bottom:14px">
+        <button class="chip${e.kind==='normal'?' on':''}" data-w-kind="normal">Обычный</button>
+        <button class="chip${e.kind==='debt'?' on':''}" data-w-kind="debt">Долги</button>
+      </div>
+      <div class="field-l">Цвет</div>
+      <div class="chips" style="margin-bottom:18px">
+        ${PALETTE.map(c => `<button data-w-color="${c}" style="width:34px;height:34px;border-radius:50%;background:${c};
+          box-shadow:${e.color===c?'0 0 0 3px #fff':'none'}"></button>`).join('')}
+      </div>
+      <button class="btn" id="saveWallet">Сохранить</button>
+      ${e.id && ws.length>1 ? `<button class="btn danger" id="delWallet" style="margin-top:8px">Удалить кошелёк</button>` : ''}
+    `, `<button class="x" id="backSheet">‹</button>`);
+  }
+  return sheetWrap('Кошельки', `
+    ${ws.map(w => `
+      <button class="row" style="width:100%" data-edit-wallet="${w.id}">
+        <div class="op-icon" style="background:${w.color};width:38px;height:38px;font-size:17px;margin-right:12px">${w.icon}</div>
+        <div class="row-main">
+          <div class="row-title">${esc(w.name)}</div>
+          <div class="row-sub">${w.currency}${w.kind==='debt'?' · долги':''}</div>
+        </div>
+        <div style="font-weight:700">${fmt(walletBalance(w.id))} ${sign(w.currency)}</div>
+        <span class="row-go">›</span>
+      </button>`).join('')}
+    <button class="btn grey" id="newWallet" style="margin-top:16px">+ Новый кошелёк</button>
+  `);
+}
+
+// ---- категории ----
+function sheetCats(){
+  const type = S.sheet.catType;
+  const e = S.sheet.edit;
+  if(e){
+    const roots = parents(type);
+    return sheetWrap(e.id ? 'Категория' : 'Новая категория', `
+      <div style="display:flex;gap:8px;margin-bottom:14px">
+        <input class="inp" id="cIcon" value="${esc(e.icon)}" style="width:64px;text-align:center;font-size:22px"/>
+        <input class="inp" id="cName" placeholder="Название" value="${esc(e.name)}"/>
+      </div>
+      <div class="field-l">Иконка</div>
+      <div class="chips" style="margin-bottom:14px;max-height:120px;overflow-y:auto">
+        ${ICONS.map(ic => `<button class="chip${e.icon===ic?' on':''}" data-c-icon="${ic}" style="font-size:19px;padding:6px 10px">${ic}</button>`).join('')}
+      </div>
+      <div class="field-l">Уровень</div>
+      <div class="chips" style="margin-bottom:14px">
+        <button class="chip${!e.parentId?' on':''}" data-c-parent="">Основная</button>
+        ${roots.filter(r=>r.id!==e.id).map(r => `<button class="chip${e.parentId===r.id?' on':''}" data-c-parent="${r.id}">внутри ${esc(r.name)}</button>`).join('')}
+      </div>
+      ${!e.parentId ? `<div class="field-l">Цвет</div>
+      <div class="chips" style="margin-bottom:18px">
+        ${PALETTE.map(c => `<button data-c-color="${c}" style="width:34px;height:34px;border-radius:50%;background:${c};
+          box-shadow:${e.color===c?'0 0 0 3px #fff':'none'}"></button>`).join('')}
+      </div>` : ''}
+      <button class="btn" id="saveCat">Сохранить</button>
+      ${e.id ? `<button class="btn danger" id="delCat" style="margin-top:8px">Удалить категорию</button>` : ''}
+    `, `<button class="x" id="backSheet">‹</button>`);
+  }
+  return sheetWrap(type==='expense' ? 'Категории расходов' : 'Категории доходов', `
+    ${parents(type).map(c => `
+      <div style="padding:10px 0;border-bottom:.5px solid var(--line)">
+        <button style="display:flex;align-items:center;gap:12px;width:100%;text-align:left" data-edit-cat="${c.id}">
+          <div class="op-icon" style="background:${c.color};width:38px;height:38px;font-size:17px">${c.icon}</div>
+          <div style="flex:1;font-size:16px">${esc(c.name)}</div>
+          <span class="row-go">›</span>
+        </button>
+        <div class="chips" style="margin-top:8px;padding-left:50px">
+          ${childrenOf(c.id).map(sc => `<button class="chip" data-edit-cat="${sc.id}">${esc(sc.name)}</button>`).join('')}
+          <button class="chip on-soft" data-new-sub="${c.id}">+ подкатегория</button>
+        </div>
+      </div>`).join('')}
+    <button class="btn grey" id="newCat" style="margin-top:16px">+ Новая категория</button>
+  `);
+}
+
+// ---- удаление данных ----
+function sheetWipe(){
+  const n = S.ops.filter(o=>o.profileId===S.profileId).length;
+  return sheetWrap('Удалить данные', `
+    <div style="color:var(--muted);font-size:15px;line-height:1.6;margin-bottom:20px">
+      В профиле «${esc(profile()?.name||'')}» сейчас ${n} операций.
+      Кошельки и категории останутся на месте — сотрутся только операции.
+      Отменить это нельзя.
+    </div>
+    <button class="btn danger" id="wipeOps" style="background:var(--surface2)">Удалить все операции профиля</button>
+  `);
+}
+
+function renderSheet(){
+  if(!S.sheet) return '';
+  switch(S.sheet.mode){
+    case 'op':       return sheetOp();
+    case 'month':    return sheetMonth();
+    case 'profiles': return sheetProfiles();
+    case 'currency': return sheetCurrency();
+    case 'wallets':  return sheetWallets();
+    case 'cats':     return sheetCats();
+    case 'wipe':     return sheetWipe();
+    default:         return '';
+  }
+}
+
+// ==================== СБОРКА ====================
+
+function render(){
+  const root = document.getElementById('app');
+  if(!S.ready){
+    root.innerHTML = '<div class="empty" style="padding-top:40vh">Загрузка…</div>';
+    return;
+  }
+  const screen =
+    S.tab === 'panel'   ? viewPanel()   :
+    S.tab === 'history' ? viewHistory() :
+    S.tab === 'report'  ? viewReport()  : viewSettings();
+
+  const tabs = [
+    ['panel','⠿','Панель'],
+    ['history','☰','История'],
+    ['report','◕','Отчёт'],
+    ['settings','⚙','Настройки'],
+  ];
+
+  root.innerHTML = `
+    ${S.syncing ? '<div class="sync">Сохранение…</div>' : ''}
+    ${screen}
+    <button class="fab" id="fab">+</button>
+    <nav class="tabbar"><div class="tabbar-in">
+      ${tabs.map(([t,ic,l]) => `<button class="tab${S.tab===t?' on':''}" data-go-tab="${t}">
+        <span class="ic">${ic}</span>${l}</button>`).join('')}
+    </div></nav>
+    ${renderSheet()}`;
+
+  bind();
+}
+// ==================== СОБЫТИЯ ====================
+
+const $  = sel => document.querySelector(sel);
+const $$ = sel => Array.from(document.querySelectorAll(sel));
+const on = (sel, fn) => $$(sel).forEach(el => el.onclick = () => fn(el));
+
+function openOpSheet(patch = {}){
+  const ws = myWallets();
+  setS({sheet:{
+    mode:'op', type:'expense', id:null, amount:'', catId:null,
+    walletId: ws[0]?.id || null, toWalletId: ws[1]?.id || null,
+    amountTo:'', note:'', date: localInput(new Date()), ...patch
+  }});
+}
+function readOpInputs(){
+  const s = S.sheet;
+  if(!s || s.mode !== 'op') return;
+  s.amount   = $('#opAmt')?.value ?? s.amount;
+  s.note     = $('#opNote')?.value ?? s.note;
+  s.date     = $('#opDate')?.value || s.date;
+  s.amountTo = $('#opAmtTo')?.value ?? s.amountTo;
+}
+const patchSheet = patch => { readOpInputs(); setS({sheet:{...S.sheet, ...patch}}); };
+
+function bind(){
+  // --- навигация ---
+  on('[data-go-tab]', el => setS({tab: el.dataset.goTab, search:''}));
+  on('[data-toggle]', el => {
+    const open = {...S.open, [el.dataset.toggle]: !S.open[el.dataset.toggle]};
+    LS.set('open', open); setS({open});
+  });
+  on('#monthBtn', () => setS({sheet:{mode:'month'}}));
+  on('#prevMonth', () => setS(S.month === 0 ? {month:11, year:S.year-1} : {month:S.month-1}));
+  on('#nextMonth', () => setS(S.month === 11 ? {month:0, year:S.year+1} : {month:S.month+1}));
+  on('#profileBtn', () => setS({sheet:{mode:'profiles'}}));
+  on('[data-report]', el => setS({reportKind: el.dataset.report}));
+
+  // --- панель ---
+  on('[data-tile]', el => {
+    const {tile, id} = el.dataset;
+    if(tile === 'cat'){
+      const c = cat(id);
+      openOpSheet({type: c.type, catId: id});
+    } else {
+      const ws = myWallets();
+      openOpSheet({type:'transfer', walletId:id, toWalletId:(ws.find(w=>w.id!==id)||{}).id});
+    }
+  });
+  on('#fab', () => openOpSheet());
+
+  // --- история ---
+  const si = $('#searchInp');
+  if(si){
+    si.oninput = e => { S.search = e.target.value; renderKeepFocus(); };
+  }
+  on('#clearSearch', () => setS({search:''}));
+  on('[data-edit-op]', el => {
+    const o = S.ops.find(x => x.id === el.dataset.editOp);
+    if(!o) return;
+    setS({sheet:{mode:'op', type:o.type, id:o.id, amount:o.amount, catId:o.catId,
+      walletId:o.walletId, toWalletId:o.toWalletId, amountTo:o.amountTo||'',
+      note:o.note||'', date: localInput(new Date(o.date))}});
+  });
+
+  // --- настройки (эти кнопки живут на экране, а не в листе) ---
+  on('[data-sheet]', el => {
+    const v = el.dataset.sheet;
+    if(v.startsWith('cats-')) setS({sheet:{mode:'cats', catType: v.slice(5), edit:null}});
+    else setS({sheet:{mode:v, edit:null}});
+  });
+  on('#toggleDebt', () => { const v = !S.showDebt; LS.set('showDebt', v); setS({showDebt:v}); });
+  on('#exportCsv', () => exportCsv());
+
+  // --- бюджеты ---
+  $$('.budget-inp').forEach(inp => {
+    inp.onchange = () => { setBudget(inp.dataset.cat, Number(inp.value) || 0); render(); };
+    inp.onkeydown = e => { if(e.key === 'Enter') inp.blur(); };
+  });
+
+  bindSheet();
+}
+
+function renderKeepFocus(){
+  const pos = $('#searchInp')?.selectionStart;
+  render();
+  const inp = $('#searchInp');
+  if(inp){ inp.focus(); try { inp.setSelectionRange(pos, pos); } catch {} }
+}
+
+function bindSheet(){
+  const close = () => setS({sheet:null});
+  on('#closeSheet', close);
+  const bg = $('#sheetBg');
+  if(bg) bg.onclick = e => { if(e.target === bg) close(); };
+  on('#backSheet', () => setS({sheet:{...S.sheet, edit:null}}));
+  if(!S.sheet) return;
+
+  // ---- операция ----
+  on('[data-op-type]', el => {
+    const type = el.dataset.opType;
+    const first = parents(type === 'income' ? 'income' : 'expense')[0];
+    patchSheet({type, catId: type === 'transfer' ? null : (first ? first.id : null)});
+  });
+  on('[data-pick-cat]', el => patchSheet({catId: el.dataset.pickCat}));
+  on('[data-pick-wallet]', el => patchSheet({walletId: el.dataset.pickWallet}));
+  on('[data-pick-to]', el => patchSheet({toWalletId: el.dataset.pickTo}));
+
+  on('#saveOp', () => {
+    readOpInputs();
+    const s = S.sheet;
+    const amount = Number(s.amount);
+    if(!amount || amount <= 0){ alert('Впишите сумму больше нуля'); return; }
+    if(s.type === 'transfer'){
+      if(!s.walletId || !s.toWalletId || s.walletId === s.toWalletId){
+        alert('Выберите два разных кошелька'); return;
+      }
+    } else if(!s.catId){ alert('Выберите категорию'); return; }
+
+    const data = {
+      type: s.type, amount,
+      walletId: s.walletId || null,
+      catId: s.type === 'transfer' ? null : s.catId,
+      toWalletId: s.type === 'transfer' ? s.toWalletId : null,
+      amountTo: s.type === 'transfer' ? (Number(s.amountTo) || amount) : null,
+      note: (s.note || '').trim(),
+      date: new Date(s.date).toISOString(),
+    };
+    saveOp(data, s.id);
+    const d = new Date(s.date);
+    setS({sheet:null, month:d.getMonth(), year:d.getFullYear()});
+  });
+
+  on('#deleteOp', () => {
+    if(!confirm('Удалить эту операцию?')) return;
+    deleteOp(S.sheet.id);
+    setS({sheet:null});
+  });
+
+  // ---- период ----
+  on('[data-pick-month]', el => setS({month: +el.dataset.pickMonth, sheet:null}));
+  on('[data-pick-year]', el => setS({year: +el.dataset.pickYear}));
+
+  // ---- профили ----
+  on('[data-use-profile]', el => {
+    LS.set('profile', el.dataset.useProfile);
+    setS({profileId: el.dataset.useProfile, sheet:null});
+  });
+  on('#addProfile', () => {
+    const name = $('#npName')?.value.trim();
+    if(!name){ alert('Впишите название профиля'); return; }
+    const icon = ($('#npIcon')?.value || name[0]).slice(0,2);
+    const pid = seedProfile(name, icon);
+    LS.set('profile', pid);
+    setS({profileId: pid, sheet:null});
+  });
+  on('[data-del-profile]', el => {
+    const id = el.dataset.delProfile;
+    const p = S.profiles.find(x => x.id === id);
+    if(!confirm(`Удалить профиль «${p.name}» со всеми его операциями, кошельками и категориями?`)) return;
+    S.ops.filter(o=>o.profileId===id).forEach(o => fbDel(COL.ops, o.id));
+    S.wallets.filter(w=>w.profileId===id).forEach(w => fbDel(COL.wallets, w.id));
+    S.cats.filter(c=>c.profileId===id).forEach(c => fbDel(COL.cats, c.id));
+    fbDel(COL.profiles, id);
+    S.ops = S.ops.filter(o=>o.profileId!==id);
+    S.wallets = S.wallets.filter(w=>w.profileId!==id);
+    S.cats = S.cats.filter(c=>c.profileId!==id);
+    S.profiles = S.profiles.filter(x=>x.id!==id);
+    const next = S.profiles[0].id;
+    LS.set('profile', next);
+    setS({profileId: next, sheet:null});
+  });
+
+  // ---- валюта ----
+  on('[data-pick-currency]', el => {
+    LS.set('currency', el.dataset.pickCurrency);
+    setS({mainCurrency: el.dataset.pickCurrency});
+  });
+  $$('.rate-inp').forEach(inp => inp.onchange = () => {
+    const rates = {...S.rates, [inp.dataset.rate]: Number(inp.value) || 0};
+    LS.set('rates', rates); setS({rates});
+  });
+
+  // ---- кошельки ----
+  on('#newWallet', () => setS({sheet:{...S.sheet, edit:{
+    id:null, name:'', icon:'👛', color:PALETTE[0], currency:S.mainCurrency,
+    kind:'normal', displayBalance:0, initialBalance:0}}}));
+  on('[data-edit-wallet]', el => {
+    const w = wallet(el.dataset.editWallet);
+    setS({sheet:{...S.sheet, edit:{...w, displayBalance: walletBalance(w.id)}}});
+  });
+  const readWallet = () => ({
+    name: $('#wName')?.value ?? S.sheet.edit.name,
+    icon: $('#wIcon')?.value ?? S.sheet.edit.icon,
+    displayBalance: $('#wBal')?.value ?? S.sheet.edit.displayBalance,
+  });
+  on('[data-w-cur]', el => setS({sheet:{...S.sheet, edit:{...S.sheet.edit, ...readWallet(), currency: el.dataset.wCur}}}));
+  on('[data-w-kind]', el => setS({sheet:{...S.sheet, edit:{...S.sheet.edit, ...readWallet(), kind: el.dataset.wKind}}}));
+  on('[data-w-color]', el => setS({sheet:{...S.sheet, edit:{...S.sheet.edit, ...readWallet(), color: el.dataset.wColor}}}));
+  on('#saveWallet', () => {
+    const e = {...S.sheet.edit, ...readWallet()};
+    if(!String(e.name).trim()){ alert('Впишите название кошелька'); return; }
+    const wanted = Number(e.displayBalance) || 0;
+    if(e.id){
+      // Двигаем стартовый остаток так, чтобы итог совпал с введённым
+      const computed = walletBalance(e.id) - (Number(e.initialBalance) || 0);
+      const data = {name:e.name.trim(), icon:e.icon, color:e.color, currency:e.currency,
+        kind:e.kind, initialBalance: wanted - computed, profileId:S.profileId, order:e.order||0};
+      fbUpd(COL.wallets, e.id, data);
+      S.wallets = S.wallets.map(w => w.id === e.id ? {...w, ...data} : w);
+    } else {
+      const data = {name:e.name.trim(), icon:e.icon, color:e.color, currency:e.currency,
+        kind:e.kind, initialBalance: wanted, profileId:S.profileId, order:myWallets().length};
+      S.wallets.push({...data, id: fbAdd(COL.wallets, data)});
+    }
+    setS({sheet:{...S.sheet, edit:null}});
+  });
+  on('#delWallet', () => {
+    const e = S.sheet.edit;
+    const used = S.ops.filter(o => o.walletId === e.id || o.toWalletId === e.id).length;
+    if(!confirm(used ? `С этим кошельком связано ${used} операций. Они останутся, но потеряют кошелёк. Удалить?` : 'Удалить кошелёк?')) return;
+    fbDel(COL.wallets, e.id);
+    S.wallets = S.wallets.filter(w => w.id !== e.id);
+    setS({sheet:{...S.sheet, edit:null}});
+  });
+
+  // ---- категории ----
+  const type = S.sheet.catType;
+  on('#newCat', () => setS({sheet:{...S.sheet, edit:{
+    id:null, name:'', icon:'💼', color:PALETTE[0], parentId:null, type}}}));
+  on('[data-new-sub]', el => setS({sheet:{...S.sheet, edit:{
+    id:null, name:'', icon: cat(el.dataset.newSub).icon, color: cat(el.dataset.newSub).color,
+    parentId: el.dataset.newSub, type}}}));
+  on('[data-edit-cat]', el => setS({sheet:{...S.sheet, edit:{...cat(el.dataset.editCat)}}}));
+  const readCat = () => ({
+    name: $('#cName')?.value ?? S.sheet.edit.name,
+    icon: $('#cIcon')?.value ?? S.sheet.edit.icon,
+  });
+  on('[data-c-icon]', el => setS({sheet:{...S.sheet, edit:{...S.sheet.edit, ...readCat(), icon: el.dataset.cIcon}}}));
+  on('[data-c-color]', el => setS({sheet:{...S.sheet, edit:{...S.sheet.edit, ...readCat(), color: el.dataset.cColor}}}));
+  on('[data-c-parent]', el => setS({sheet:{...S.sheet, edit:{...S.sheet.edit, ...readCat(), parentId: el.dataset.cParent || null}}}));
+  on('#saveCat', () => {
+    const e = {...S.sheet.edit, ...readCat()};
+    if(!String(e.name).trim()){ alert('Впишите название категории'); return; }
+    const parent = e.parentId ? cat(e.parentId) : null;
+    const data = {profileId:S.profileId, type: e.type || type, name:e.name.trim(),
+      icon: parent ? parent.icon : e.icon, color: parent ? parent.color : e.color,
+      parentId: e.parentId || null, order: e.order ?? S.cats.length};
+    if(e.id){
+      fbUpd(COL.cats, e.id, data);
+      S.cats = S.cats.map(c => c.id === e.id ? {...c, ...data} : c);
+    } else {
+      S.cats.push({...data, id: fbAdd(COL.cats, data)});
+    }
+    setS({sheet:{...S.sheet, edit:null}});
+  });
+  on('#delCat', () => {
+    const e = S.sheet.edit;
+    const kids = childrenOf(e.id);
+    const used = S.ops.filter(o => o.catId === e.id || kids.some(k => k.id === o.catId)).length;
+    if(!confirm(used ? `В этой категории ${used} операций. Они останутся в истории без категории. Удалить?` : 'Удалить категорию?')) return;
+    [e.id, ...kids.map(k=>k.id)].forEach(id => { fbDel(COL.cats, id); });
+    S.cats = S.cats.filter(c => c.id !== e.id && c.parentId !== e.id);
+    setS({sheet:{...S.sheet, edit:null}});
+  });
+
+  // ---- очистка ----
+  on('#wipeOps', () => {
+    if(!confirm('Точно удалить все операции этого профиля?')) return;
+    S.ops.filter(o => o.profileId === S.profileId).forEach(o => fbDel(COL.ops, o.id));
+    S.ops = S.ops.filter(o => o.profileId !== S.profileId);
+    setS({sheet:null});
+  });
+}
+
+// ==================== ЭКСПОРТ ====================
+
+function exportCsv(){
+  const rows = [['Дата','Тип','Категория','Подкатегория','Кошелёк','Сумма','Валюта','Примечание']];
+  const typeName = {expense:'Расход', income:'Доход', transfer:'Перевод'};
+  S.ops.filter(o => o.profileId === S.profileId)
+    .slice().sort((a,b) => new Date(a.date) - new Date(b.date))
+    .forEach(o => {
+      const c = o.catId ? cat(o.catId) : null;
+      const parent = c && c.parentId ? cat(c.parentId) : null;
+      const w = wallet(o.walletId);
+      rows.push([
+        new Date(o.date).toLocaleString('ru-RU'),
+        typeName[o.type] || o.type,
+        parent ? parent.name : (c ? c.name : ''),
+        parent ? c.name : '',
+        o.type === 'transfer' ? `${w?w.name:''} → ${wallet(o.toWalletId)?.name || ''}` : (w ? w.name : ''),
+        o.amount,
+        w ? w.currency : S.mainCurrency,
+        o.note || '',
+      ]);
+    });
+  const csv = '\uFEFF' + rows
+    .map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(';'))
+    .join('\r\n');
+  const url = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8'}));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `findirector-${profile()?.name || 'profile'}-${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 3000);
+}
+
+// ==================== СТАРТ ====================
+
+if('serviceWorker' in navigator){
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(()=>{}));
+}
+
+render();
+try {
+  await loadAll();
+  S.ready = true;
+  render();
+} catch(err){
+  document.getElementById('app').innerHTML =
+    `<div class="empty">Не удалось загрузить данные.<br>${esc(err.message)}<br><br>Проверьте подключение и обновите страницу.</div>`;
+}
