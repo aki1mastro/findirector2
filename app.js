@@ -314,12 +314,12 @@ function viewPanel(){
   const p = profile();
   const incTot = catTotals('income'), expTot = catTotals('expense');
 
-  const incTiles = parents('income')
+  const incTiles = parents('income').filter(c => !c.hidden)
     .map(c => tileHTML(c.id, c.name, c.icon, c.color, incTot[c.id]||0, 'cat')).join('');
-  const expTiles = parents('expense')
+  const expTiles = parents('expense').filter(c => !c.hidden)
     .map(c => tileHTML(c.id, c.name, c.icon, c.color, expTot[c.id]||0, 'cat')).join('');
 
-  const ws = myWallets().filter(w => S.showDebt || w.kind !== 'debt');
+  const ws = myWallets().filter(w => !w.hidden && (S.showDebt || w.kind !== 'debt'));
   const walTiles = ws.map(w =>
     tileHTML(w.id, w.name, w.icon, w.color, walletBalance(w.id), 'wallet')).join('');
 
@@ -631,6 +631,12 @@ function viewSettings(){
           <div class="row-sub">${ws.length} шт. Здесь же правится текущий остаток.</div>
         </div><span class="row-go">›</span>
       </button>
+      <button class="row" style="width:100%" data-sheet="panel">
+        <div class="row-main">
+          <div class="row-title">Настройка панели</div>
+          <div class="row-sub">Порядок плиток и что показывать на главной</div>
+        </div><span class="row-go">›</span>
+      </button>
       <button class="row" style="width:100%" data-sheet="cats-expense">
         <div class="row-main">
           <div class="row-title">Категории расходов</div>
@@ -919,6 +925,38 @@ function sheetWipe(){
   `);
 }
 
+// ---- настройка панели ----
+function panelItems(kind){
+  if(kind === 'wallets') return myWallets();
+  return parents(kind);
+}
+
+function sheetPanel(){
+  const kind = S.sheet.panelKind || 'expense';
+  const items = panelItems(kind);
+  const tabs = [['income','Доходы'],['wallets','Кошельки'],['expense','Расходы']];
+
+  return sheetWrap('Настройка панели', `
+    <div class="seg">
+      ${tabs.map(([k,l]) => `<button class="${kind===k?'on':''}" data-panel-kind="${k}">${l}</button>`).join('')}
+    </div>
+    <div style="color:var(--dim);font-size:13px;margin-bottom:14px;line-height:1.5">
+      Тяните за ячейки слева, чтобы поменять порядок. Глаз убирает плитку с панели —
+      сама категория и её операции остаются на месте.
+    </div>
+    <div class="drag-list" id="dragList" data-kind="${kind}">
+      ${items.map(it => `
+        <div class="drag-row${it.hidden?' hidden-item':''}" data-drag-id="${it.id}">
+          <span class="drag-handle" data-handle>⠿</span>
+          <div class="op-icon" style="background:${it.color};width:34px;height:34px;font-size:16px">${it.icon}</div>
+          <div class="drag-name">${esc(it.name)}</div>
+          <button class="eye${it.hidden?' off':''}" data-hide="${it.id}">${it.hidden?'🚫':'👁'}</button>
+        </div>`).join('')}
+    </div>
+    ${!items.length ? '<div class="empty">Здесь пока пусто</div>' : ''}
+  `);
+}
+
 function renderSheet(){
   if(!S.sheet) return '';
   switch(S.sheet.mode){
@@ -928,6 +966,7 @@ function renderSheet(){
     case 'currency': return sheetCurrency();
     case 'wallets':  return sheetWallets();
     case 'cats':     return sheetCats();
+    case 'panel':    return sheetPanel();
     case 'wipe':     return sheetWipe();
     default:         return '';
   }
@@ -1243,12 +1282,100 @@ function bindSheet(){
     setS({sheet:{...S.sheet, edit:null}});
   });
 
+  // ---- настройка панели ----
+  on('[data-panel-kind]', el => setS({sheet:{...S.sheet, panelKind: el.dataset.panelKind}}));
+  bindPanelDrag();
+
   // ---- очистка ----
   on('#wipeOps', () => {
     if(!confirm('Точно удалить все операции этого профиля?')) return;
     S.ops.filter(o => o.profileId === S.profileId).forEach(o => fbDel(COL.ops, o.id));
     S.ops = S.ops.filter(o => o.profileId !== S.profileId);
     setS({sheet:null});
+  });
+}
+
+// ==================== ПЕРЕТАСКИВАНИЕ ====================
+
+function commitOrder(kind, ids){
+  const col = kind === 'wallets' ? COL.wallets : COL.cats;
+  const pos = {};
+  ids.forEach((id, i) => { pos[id] = i; fbUpd(col, id, {order: i}); });
+  if(kind === 'wallets'){
+    S.wallets = S.wallets.map(w => pos[w.id] === undefined ? w : {...w, order: pos[w.id]})
+                         .sort((a,b) => (a.order||0) - (b.order||0));
+  } else {
+    S.cats = S.cats.map(c => pos[c.id] === undefined ? c : {...c, order: pos[c.id]});
+  }
+  render();
+}
+
+function toggleHidden(kind, id){
+  if(kind === 'wallets'){
+    const w = wallet(id);
+    fbUpd(COL.wallets, id, {hidden: !w.hidden});
+    S.wallets = S.wallets.map(x => x.id === id ? {...x, hidden: !w.hidden} : x);
+  } else {
+    const c = cat(id);
+    fbUpd(COL.cats, id, {hidden: !c.hidden});
+    S.cats = S.cats.map(x => x.id === id ? {...x, hidden: !c.hidden} : x);
+  }
+  render();
+}
+
+function bindPanelDrag(){
+  const list = document.getElementById('dragList');
+  if(!list) return;
+  const kind = list.dataset.kind;
+
+  list.querySelectorAll('[data-hide]').forEach(btn => {
+    btn.onclick = e => { e.stopPropagation(); toggleHidden(kind, btn.dataset.hide); };
+  });
+
+  let row = null, startY = 0;
+
+  const move = e => {
+    if(!row) return;
+    e.preventDefault();
+    row.style.transform = `translateY(${e.clientY - startY}px)`;
+
+    // Середина перетаскиваемой строки внутри соседа — значит меняем их местами
+    const box = row.getBoundingClientRect();
+    const mid = box.top + box.height / 2;
+    for(const other of Array.from(list.children)){
+      if(other === row) continue;
+      const r = other.getBoundingClientRect();
+      if(mid > r.top && mid < r.bottom){
+        const below = row.compareDocumentPosition(other) & 4; // DOCUMENT_POSITION_FOLLOWING
+        row.style.transform = '';
+        if(below) other.after(row); else other.before(row);
+        startY = e.clientY;           // сбрасываем отсчёт от нового места
+        break;
+      }
+    }
+  };
+
+  const end = () => {
+    if(!row) return;
+    row.style.transform = '';
+    row.classList.remove('dragging');
+    row = null;
+    document.removeEventListener('pointermove', move);
+    document.removeEventListener('pointerup', end);
+    document.removeEventListener('pointercancel', end);
+    commitOrder(kind, Array.from(list.children).map(el => el.dataset.dragId));
+  };
+
+  list.querySelectorAll('[data-handle]').forEach(handle => {
+    handle.addEventListener('pointerdown', e => {
+      row = handle.closest('.drag-row');
+      startY = e.clientY;
+      row.classList.add('dragging');
+      e.preventDefault();
+      document.addEventListener('pointermove', move, {passive:false});
+      document.addEventListener('pointerup', end);
+      document.addEventListener('pointercancel', end);
+    });
   });
 }
 
