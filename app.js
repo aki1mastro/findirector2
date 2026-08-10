@@ -3,14 +3,18 @@ import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
   collection, getDocs, doc, setDoc, deleteDoc, updateDoc
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+import {
+  getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect,
+  getRedirectResult, onAuthStateChanged, signOut
+} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 
 const firebaseConfig = {
-  apiKey: "AIzaSyD9DdWpxv8OKmF6hpuNwDlLlfpbOx3riAE",
-  authDomain: "financial-asistent.firebaseapp.com",
-  projectId: "financial-asistent",
-  storageBucket: "financial-asistent.firebasestorage.app",
-  messagingSenderId: "702605526775",
-  appId: "1:702605526775:web:150d4038df8aa053dfb5f2"
+  apiKey: "AIzaSyDwBMOwkusrREAlpMhvf9E0sZPEytnQlhI",
+  authDomain: "findirector2.firebaseapp.com",
+  projectId: "findirector2",
+  storageBucket: "findirector2.firebasestorage.app",
+  messagingSenderId: "1037712647995",
+  appId: "1:1037712647995:web:6666fa1b41629aa683b91e"
 };
 
 const fbApp = initializeApp(firebaseConfig);
@@ -18,6 +22,16 @@ const fbApp = initializeApp(firebaseConfig);
 const db = initializeFirestore(fbApp, {
   localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
 });
+
+// Кому разрешён вход. Тот же список должен стоять в правилах Firestore —
+// здесь он только ради понятного сообщения, защита живёт на сервере.
+const ALLOWED = [
+  'akimdauletkeldy@gmail.com',
+];
+
+const auth = getAuth(fbApp);
+const provider = new GoogleAuthProvider();
+provider.setCustomParameters({prompt: 'select_account'});
 
 // Новые коллекции с префиксом v2_ — старый ФинДиректор не затрагивается
 const COL = {
@@ -110,6 +124,7 @@ const LS = {
 
 let S = {
   ready:false, syncing:false,
+  authReady:false, user:null, authError:'', signingIn:false,
   tab:'panel',                       // panel | history | report | settings
   month:today.getMonth(), year:today.getFullYear(),
   profiles:[], wallets:[], cats:[], ops:[], budgets:{},
@@ -546,6 +561,26 @@ function viewReport(){
     ${body}
   </div>`;
 }
+// ==================== ВХОД ====================
+
+function viewLogin(){
+  return `
+  <div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;padding:32px;text-align:center">
+    <div style="width:84px;height:84px;border-radius:50%;background:var(--accent);
+      display:flex;align-items:center;justify-content:center;font-size:40px;margin-bottom:24px">₸</div>
+    <div style="font-size:30px;font-weight:800;letter-spacing:-.5px">ФинДиректор</div>
+    <div style="color:var(--muted);font-size:15px;margin:10px 0 32px;line-height:1.5;max-width:300px">
+      Личный учёт денег. Данные видны только вам.
+    </div>
+    ${S.authError ? `<div style="color:var(--red);font-size:14px;margin-bottom:18px;
+      line-height:1.5;max-width:320px">${esc(S.authError)}</div>` : ''}
+    <button class="btn" id="loginBtn" style="max-width:320px">
+      ${S.signingIn ? 'Открываем окно входа…' : 'Войти через Google'}
+    </button>
+  </div>`;
+}
+
 // ==================== НАСТРОЙКИ ====================
 
 function viewSettings(){
@@ -556,6 +591,16 @@ function viewSettings(){
   return `
   <div class="screen-title">Настройки</div>
   <div class="wrap">
+    <div class="card" style="padding:0 16px">
+      <div class="row">
+        <div class="row-main">
+          <div class="row-title">Аккаунт</div>
+          <div class="row-sub">${esc(S.user?.email || '')}</div>
+        </div>
+        <button class="row-go" id="signOutBtn" style="color:var(--accent)">Выйти</button>
+      </div>
+    </div>
+
     <div class="card" style="padding:0 16px">
       <button class="row" style="width:100%" data-sheet="profiles">
         <div class="row-main">
@@ -892,6 +937,15 @@ function renderSheet(){
 
 function render(){
   const root = document.getElementById('app');
+  if(!S.authReady){
+    root.innerHTML = '<div class="empty" style="padding-top:40vh">Проверяем вход…</div>';
+    return;
+  }
+  if(!S.user){
+    root.innerHTML = viewLogin();
+    bindLogin();
+    return;
+  }
   if(!S.ready){
     root.innerHTML = '<div class="empty" style="padding-top:40vh">Загрузка…</div>';
     return;
@@ -992,6 +1046,10 @@ function bind(){
   });
   on('#toggleDebt', () => { const v = !S.showDebt; LS.set('showDebt', v); setS({showDebt:v}); });
   on('#exportCsv', () => exportCsv());
+  on('#signOutBtn', async () => {
+    if(!confirm('Выйти из аккаунта? Данные останутся в облаке.')) return;
+    await signOut(auth);
+  });
 
   // --- бюджеты ---
   $$('.budget-inp').forEach(inp => {
@@ -1229,16 +1287,73 @@ function exportCsv(){
 
 // ==================== СТАРТ ====================
 
+function bindLogin(){
+  const btn = document.getElementById('loginBtn');
+  if(btn) btn.onclick = doSignIn;
+}
+
+async function doSignIn(){
+  setS({signingIn:true, authError:''});
+  try {
+    await signInWithPopup(auth, provider);
+  } catch(err){
+    // В приложении с домашнего экрана всплывающее окно часто блокируется —
+    // тогда уходим на вход с переходом на страницу Google и возвращаемся обратно
+    const popupFailed = ['auth/popup-blocked','auth/popup-closed-by-user',
+      'auth/cancelled-popup-request','auth/operation-not-supported-in-this-environment'];
+    if(popupFailed.includes(err.code)){
+      try { await signInWithRedirect(auth, provider); return; }
+      catch(e2){ setS({signingIn:false, authError:'Не удалось открыть вход: ' + e2.message}); return; }
+    }
+    setS({signingIn:false, authError: authMessage(err)});
+  }
+}
+
+function authMessage(err){
+  if(err.code === 'auth/unauthorized-domain')
+    return 'Этот адрес не разрешён в Firebase. Добавьте домен в Authentication → Settings → Authorized domains.';
+  if(err.code === 'auth/operation-not-allowed')
+    return 'Вход через Google выключен. Включите провайдера Google в Firebase → Authentication.';
+  return 'Не удалось войти: ' + err.message;
+}
+
 if('serviceWorker' in navigator){
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(()=>{}));
 }
 
 render();
-try {
-  await loadAll();
-  S.ready = true;
+
+getRedirectResult(auth).catch(err => setS({authError: authMessage(err)}));
+
+onAuthStateChanged(auth, async user => {
+  S.authReady = true;
+  S.signingIn = false;
+
+  if(!user){
+    S.user = null; S.ready = false;
+    S.profiles = []; S.wallets = []; S.cats = []; S.ops = []; S.budgets = {};
+    render();
+    return;
+  }
+
+  const email = (user.email || '').toLowerCase();
+  if(ALLOWED.length && !ALLOWED.includes(email)){
+    await signOut(auth);
+    setS({user:null, authError:`Аккаунт ${email} не в списке разрешённых.`});
+    return;
+  }
+
+  S.user = {uid:user.uid, email:user.email, name:user.displayName};
+  S.authError = '';
   render();
-} catch(err){
-  document.getElementById('app').innerHTML =
-    `<div class="empty">Не удалось загрузить данные.<br>${esc(err.message)}<br><br>Проверьте подключение и обновите страницу.</div>`;
-}
+
+  try {
+    await loadAll();
+    S.ready = true;
+    render();
+  } catch(err){
+    document.getElementById('app').innerHTML =
+      `<div class="empty">Не удалось загрузить данные.<br>${esc(err.message)}<br><br>
+       Проверьте правила Firestore и обновите страницу.</div>`;
+  }
+});
