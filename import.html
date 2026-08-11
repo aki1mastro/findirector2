@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<meta name="theme-color" content="#000000"/>
+<title>Перенос данных · ФинДиректор</title>
+<link rel="stylesheet" href="style.css"/>
+<style>
+  .log{background:var(--surface);border-radius:12px;padding:14px;font-size:13px;
+       line-height:1.7;max-height:46vh;overflow-y:auto;margin-bottom:14px;
+       font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap}
+  .ok{color:var(--green)} .warn{color:#ffd60a} .err{color:var(--red)} .dim{color:var(--muted)}
+  .stat{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+  .stat div{background:var(--surface);border-radius:12px;padding:12px 14px}
+  .stat b{display:block;font-size:20px;margin-top:2px}
+</style>
+</head>
+<body>
+<div class="wrap" style="padding-top:20px;padding-bottom:40px">
+  <div style="font-size:28px;font-weight:800;margin-bottom:6px">Перенос данных</div>
+  <div style="color:var(--muted);font-size:14px;line-height:1.5;margin-bottom:20px">
+    Заберём операции, кошельки и лимиты из старого ФинДиректора
+    и положим в новый. Старая база останется нетронутой.
+  </div>
+
+  <div id="stats" class="stat" style="display:none"></div>
+  <div class="log" id="log">Готов к работе.</div>
+
+  <button class="btn" id="step1">1 · Войти и прочитать старую базу</button>
+  <button class="btn grey" id="step2" style="margin-top:10px" disabled>2 · Перенести</button>
+  <a class="btn grey" href="index.html" style="margin-top:10px;display:block;text-align:center;text-decoration:none">
+    Вернуться в приложение</a>
+</div>
+
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+import { getFirestore, collection, getDocs, doc, writeBatch }
+  from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged }
+  from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+
+// --- старый проект: только чтение ---
+const OLD = {
+  apiKey: "AIzaSyD9DdWpxv8OKmF6hpuNwDlLlfpbOx3riAE",
+  authDomain: "financial-asistent.firebaseapp.com",
+  projectId: "financial-asistent",
+  storageBucket: "financial-asistent.firebasestorage.app",
+  messagingSenderId: "702605526775",
+  appId: "1:702605526775:web:150d4038df8aa053dfb5f2"
+};
+// --- новый проект: сюда пишем ---
+const NEW = {
+  apiKey: "AIzaSyDwBMOwkusrREAlpMhvf9E0sZPEytnQlhI",
+  authDomain: "findirector2.firebaseapp.com",
+  projectId: "findirector2",
+  storageBucket: "findirector2.firebasestorage.app",
+  messagingSenderId: "1037712647995",
+  appId: "1:1037712647995:web:6666fa1b41629aa683b91e"
+};
+
+const oldDb = getFirestore(initializeApp(OLD, 'old'));
+const newApp = initializeApp(NEW, 'new');
+const newDb  = getFirestore(newApp);
+const auth   = getAuth(newApp);
+
+const COL = {profiles:'v2_profiles', wallets:'v2_wallets', cats:'v2_cats', ops:'v2_ops', budgets:'v2_budgets'};
+
+const logEl = document.getElementById('log');
+const say = (msg, cls='') => {
+  logEl.innerHTML += `\n<span class="${cls}">${msg}</span>`;
+  logEl.scrollTop = logEl.scrollHeight;
+};
+const norm = s => String(s||'').replace(/^[^\p{L}\p{N}]+/u,'').trim().toLowerCase();
+
+// Старые названия из первой версии → куда класть в новом дереве.
+// Без этого «Кафе/Рестораны» не найдёт «Кафе и рестораны» и создалось бы дублем.
+const ALIAS = {
+  'кафе/рестораны':'кафе и рестораны',
+  'еда':'кафе и рестораны',
+  'напитки':'кофе и перекусы',
+  'жильё/жкх':'жильё и жкх',
+  'жилье/жкх':'жильё и жкх',
+  'все для дома':'быт и расходники',
+  'всё для дома':'быт и расходники',
+  'техника':'быт и расходники',
+  'коммуслуги':'квартплата и счета',
+  'тарифы':'связь и интернет',
+  'бензин':'топливо',
+  'авто':'сервис и ремонт',
+  'здоровье':'медицина/аптека',
+  'гигиена':'уход и косметика',
+  'спа/баня':'салон',
+  'развлечения':'кино/театр/выставки',
+  'образование':'хобби и развитие',
+  'отпуск':'путешествия',
+  'подарки/she':'цветы и подарки',
+  'девушка':'сабина',
+  'семья/родные':'семья и родные',
+  'семья':'семья и родные',
+  'праздники':'той и традиции',
+  'ас':'ас/дастархан',
+  'пожертвования':'благотворительность',
+  'штрафы':'непредвиденное',
+  'кредиты':'финансы и прочее',
+  'прочее':'финансы и прочее',
+};
+const target = name => ALIAS[norm(name)] || norm(name);
+
+let old = null, fresh = null, profileId = null;
+
+// ---------- шаг 1: чтение ----------
+document.getElementById('step1').onclick = async () => {
+  try {
+    logEl.innerHTML = 'Вход в новый проект…';
+    await new Promise((res, rej) => {
+      onAuthStateChanged(auth, async u => {
+        if(u) return res(u);
+        try { res((await signInWithPopup(auth, new GoogleAuthProvider())).user); }
+        catch(e){ rej(e); }
+      });
+    });
+    say('Вход выполнен.', 'ok');
+
+    say('\nЧитаю старую базу…');
+    const grab = async (db, name) => {
+      const snap = await getDocs(collection(db, name));
+      const arr = []; snap.forEach(d => arr.push({...d.data(), fid: d.id}));
+      return arr;
+    };
+    old = {
+      expenses:  await grab(oldDb, 'expenses'),
+      incomes:   await grab(oldDb, 'incomes'),
+      transfers: await grab(oldDb, 'transfers'),
+      cats:      await grab(oldDb, 'categories'),
+      wallets:   await grab(oldDb, 'wallets'),
+      budgets:   await grab(oldDb, 'budgets'),
+    };
+    say(`Расходы: ${old.expenses.length}`, 'ok');
+    say(`Доходы: ${old.incomes.length}`, 'ok');
+    say(`Переводы: ${old.transfers.length}`, 'ok');
+    say(`Кошельки: ${old.wallets.length}, категории: ${old.cats.length}, лимиты: ${old.budgets.length}`, 'dim');
+
+    if(!old.expenses.length && !old.incomes.length){
+      say('\nВ старой базе нет операций. Переносить нечего.', 'warn');
+      return;
+    }
+
+    say('\nЧитаю новую базу…');
+    fresh = {
+      profiles: await grab(newDb, COL.profiles),
+      wallets:  await grab(newDb, COL.wallets),
+      cats:     await grab(newDb, COL.cats),
+      ops:      await grab(newDb, COL.ops),
+    };
+    if(!fresh.profiles.length){
+      say('В новом приложении ещё нет профиля. Откройте index.html, дождитесь загрузки и вернитесь сюда.', 'err');
+      return;
+    }
+    profileId = fresh.profiles[0].fid;
+    say(`Профиль: ${fresh.profiles[0].name}`, 'ok');
+
+    // сводка
+    const dates = [...old.expenses, ...old.incomes].map(e => new Date(e.date)).filter(d => !isNaN(d));
+    const from = new Date(Math.min(...dates)), to = new Date(Math.max(...dates));
+    const sum = old.expenses.reduce((s,e) => s + (e.amt||0), 0);
+    document.getElementById('stats').style.display = 'grid';
+    document.getElementById('stats').innerHTML = `
+      <div><span class="dim">Операций</span><b>${old.expenses.length + old.incomes.length + old.transfers.length}</b></div>
+      <div><span class="dim">Период</span><b style="font-size:15px">${from.toLocaleDateString('ru-RU')} — ${to.toLocaleDateString('ru-RU')}</b></div>
+      <div><span class="dim">Сумма расходов</span><b style="font-size:17px">${new Intl.NumberFormat('ru-RU').format(Math.round(sum))} ₸</b></div>
+      <div><span class="dim">Уже перенесено</span><b>${fresh.ops.filter(o => o.fid.startsWith('imp_')).length}</b></div>`;
+
+    say('\nГотово к переносу. Жмите шаг 2.', 'ok');
+    const b = document.getElementById('step2');
+    b.disabled = false; b.className = 'btn';
+  } catch(err){
+    say('\nОшибка: ' + err.message, 'err');
+    if(String(err.code).includes('permission'))
+      say('Старая база закрыта правилами. Временно откройте чтение в проекте financial-asistent.', 'warn');
+  }
+};
+
+// ---------- шаг 2: перенос ----------
+document.getElementById('step2').onclick = async () => {
+  document.getElementById('step2').disabled = true;
+  try {
+    const writes = [];                       // {col, id, data}
+    const push = (col, id, data) => writes.push({col, id, data});
+
+    // --- кошельки: сопоставляем по названию, недостающие создаём ---
+    const walletMap = {};                    // старый id -> новый id
+    for(const w of old.wallets){
+      const match = fresh.wallets.find(x => x.profileId === profileId && norm(x.name) === norm(w.n));
+      if(match){ walletMap[w.id] = match.fid; continue; }
+      const id = 'imp_w_' + w.fid;
+      walletMap[w.id] = id;
+      push(COL.wallets, id, {profileId, name:w.n, icon:w.e || '👛', color:w.c || '#5ac8fa',
+        currency:w.currency || 'KZT', initialBalance:Number(w.initialBalance)||0,
+        kind:/^\s*долг/i.test(w.n||'') ? 'debt' : 'normal', order:(w.order||0)+100});
+      say(`Новый кошелёк: ${w.n}`, 'warn');
+    }
+    const anyWallet = () => fresh.wallets.find(x => x.profileId === profileId)?.fid || Object.values(walletMap)[0];
+
+    // --- категории: ищем среди новых, сначала подкатегории ---
+    const catMap = {};
+    const mine = fresh.cats.filter(c => c.profileId === profileId);
+    for(const c of old.cats){
+      const type = c.type === 'income' ? 'income' : 'expense';
+      const want = target(c.n);
+      const hit = mine.find(x => x.type === type && x.parentId && norm(x.name) === want)
+               || mine.find(x => x.type === type && !x.parentId && norm(x.name) === want);
+      if(hit){ catMap[c.id] = hit.fid; continue; }
+      const id = 'imp_c_' + c.fid;
+      catMap[c.id] = id;
+      push(COL.cats, id, {profileId, type, name:c.n, icon:c.e || '💼',
+        color:c.c || '#8e8e93', parentId:null, order:900});
+      say(`Категория без пары, создам отдельно: ${c.n}`, 'warn');
+    }
+
+    const mkOf = d => `${d.getFullYear()}-${d.getMonth()}`;
+    let skipped = 0;
+
+    const addOp = (o, type, extra) => {
+      const d = new Date(o.date);
+      if(isNaN(d)){ skipped++; return; }
+      push(COL.ops, `imp_${type}_${o.fid}`, {
+        profileId, type, amount: Number(o.amt ?? o.amtFrom) || 0,
+        date: d.toISOString(), monthKey: mkOf(d),
+        note: o.note || '', catId:null, walletId:null, toWalletId:null, amountTo:null,
+        ...extra
+      });
+    };
+
+    old.expenses.forEach(e => addOp(e, 'expense', {
+      catId: catMap[e.cat] || null,
+      walletId: walletMap[e.walletId] || anyWallet()}));
+    old.incomes.forEach(e => addOp(e, 'income', {
+      catId: catMap[e.cat] || null,
+      walletId: walletMap[e.walletId] || anyWallet()}));
+    old.transfers.forEach(t => addOp(t, 'transfer', {
+      walletId: walletMap[t.from] || anyWallet(),
+      toWalletId: walletMap[t.to] || anyWallet(),
+      amountTo: Number(t.amtTo ?? t.amtFrom) || 0}));
+
+    // --- лимиты ---
+    old.budgets.forEach(b => {
+      const catId = catMap[b.fid];
+      if(!catId || !b.amount) return;
+      push(COL.budgets, `${profileId}__${catId}`, {profileId, catId, amount:b.amount});
+    });
+
+    say(`\nК записи: ${writes.length}` + (skipped ? `, пропущено с битой датой: ${skipped}` : ''), 'dim');
+
+    // --- пишем пачками ---
+    for(let i = 0; i < writes.length; i += 400){
+      const batch = writeBatch(newDb);
+      writes.slice(i, i + 400).forEach(w => batch.set(doc(newDb, w.col, w.id), w.data));
+      await batch.commit();
+      say(`Записано ${Math.min(i + 400, writes.length)} из ${writes.length}…`);
+    }
+
+    say('\nГотово. Откройте приложение и проверьте историю.', 'ok');
+    say('Повторный запуск ничего не задвоит: у каждой записи постоянный номер.', 'dim');
+  } catch(err){
+    say('\nОшибка при записи: ' + err.message, 'err');
+    document.getElementById('step2').disabled = false;
+  }
+};
+</script>
+</body>
+</html>
