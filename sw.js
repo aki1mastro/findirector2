@@ -3,7 +3,7 @@
 // Без вторых приложение офлайн вообще не стартует: сам скрипт не загрузится.
 // Данные при этом кэширует Firestore в IndexedDB, сюда его запросы не идут.
 
-const CACHE = 'findir2-v23';
+const CACHE = 'findir2-v25';
 const VENDOR = 'findir2-vendor-v1';
 
 const SHELL = [
