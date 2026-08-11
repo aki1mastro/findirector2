@@ -298,6 +298,15 @@ function tileHTML(id, name, icon, color, value, kind){
   </button>`;
 }
 
+function addTileHTML(what){
+  const label = what === 'wallets' ? 'Новый кошелёк' : 'Новая категория';
+  return `<button class="tile" data-add-tile="${what}">
+    <div class="tile-name">${label}</div>
+    <div class="tile-icon add">+</div>
+    <div class="tile-val zero">&nbsp;</div>
+  </button>`;
+}
+
 function chunk(arr, n){
   const out = [];
   for(let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
@@ -354,9 +363,9 @@ function viewPanel(){
     <button class="round-btn" data-go-tab="settings">•••</button>
   </div>
   <div class="wrap">
-    ${sectionHTML('income','Доходы', sumOf('income'), incTiles, 2)}
-    ${sectionHTML('wallets','Кошельки', walTotal, walTiles, 2)}
-    ${sectionHTML('expense','Расходы', sumOf('expense'), expTiles, 3)}
+    ${sectionHTML('income','Доходы', sumOf('income'), [...incTiles, addTileHTML('income')], 2)}
+    ${sectionHTML('wallets','Кошельки', walTotal, [...walTiles, addTileHTML('wallets')], 2)}
+    ${sectionHTML('expense','Расходы', sumOf('expense'), [...expTiles, addTileHTML('expense')], 3)}
     ${!parents('expense').length ? '<div class="empty">Категорий пока нет.<br>Добавьте их в настройках.</div>' : ''}
   </div>`;
 }
@@ -1112,7 +1121,6 @@ function render(){
   root.innerHTML = `
     ${S.syncing ? '<div class="sync">Сохранение…</div>' : ''}
     ${screen}
-    <button class="fab" id="fab">+</button>
     <nav class="tabbar"><div class="tabbar-in">
       ${tabs.map(([t,ic,l]) => `<button class="tab${S.tab===t?' on':''}" data-go-tab="${t}">
         <span class="ic">${ic}</span>${l}</button>`).join('')}
@@ -1168,7 +1176,18 @@ function bind(){
   // --- панель: касание и перетаскивание плиток ---
   bindTileDrag();
   bindPagers();
-  on('#fab', () => openOpSheet());
+  on('[data-add-tile]', el => {
+    const what = el.dataset.addTile;
+    if(what === 'wallets'){
+      setS({sheet:{mode:'wallets', edit:{
+        id:null, name:'', icon:'👛', color:PALETTE[0], currency:S.mainCurrency,
+        kind:'normal', displayBalance:0, initialBalance:0}}});
+    } else {
+      setS({sheet:{mode:'cats', catType:what, edit:{
+        id:null, name:'', icon: what === 'income' ? '💵' : '💼',
+        color:PALETTE[0], parentId:null, type:what}}});
+    }
+  });
 
   // --- история ---
   const si = $('#searchInp');
@@ -1493,7 +1512,7 @@ function pairing(src, dst){
 }
 
 function bindTileDrag(){
-  const tiles = $$('.tile');
+  const tiles = $$('.tile[data-tile]');   // плитки «+» не перетаскиваются
   if(!tiles.length) return;
 
   tiles.forEach(tile => {
