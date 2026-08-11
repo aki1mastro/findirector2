@@ -363,8 +363,8 @@ function viewPanel(){
     <button class="round-btn" data-go-tab="settings">•••</button>
   </div>
   <div class="wrap">
-    ${sectionHTML('income','Доходы', sumOf('income'), [...incTiles, addTileHTML('income')], 2)}
-    ${sectionHTML('wallets','Кошельки', walTotal, [...walTiles, addTileHTML('wallets')], 2)}
+    ${sectionHTML('income','Доходы', sumOf('income'), [...incTiles, addTileHTML('income')], 1)}
+    ${sectionHTML('wallets','Кошельки', walTotal, [...walTiles, addTileHTML('wallets')], 1)}
     ${sectionHTML('expense','Расходы', sumOf('expense'), [...expTiles, addTileHTML('expense')], 3)}
     ${!parents('expense').length ? '<div class="empty">Категорий пока нет.<br>Добавьте их в настройках.</div>' : ''}
   </div>`;
