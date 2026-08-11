@@ -298,16 +298,35 @@ function tileHTML(id, name, icon, color, value, kind){
   </button>`;
 }
 
-function sectionHTML(key, title, sum, tiles, extra=''){
+function chunk(arr, n){
+  const out = [];
+  for(let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+  return out.length ? out : [[]];
+}
+
+// Секция панели: плитки разложены по страницам, лишние листаются вбок
+function sectionHTML(key, title, sum, items, maxRows){
   const open = S.open[key];
+  const perPage = maxRows * 4;
+  const pages = chunk(items, perPage);
+  const rows = Math.min(maxRows, Math.max(1, Math.ceil(Math.min(items.length, perPage) / 4)));
+
   return `
   <div class="sec-head">
     <button class="sec-name" data-toggle="${key}">
       <span class="chev${open?'':' closed'}">▾</span>${title}
     </button>
-    <span class="sec-sum">${extra}${fmt(sum)} ${mainSign()}</span>
+    <span class="sec-sum">${fmt(sum)} ${mainSign()}</span>
   </div>
-  ${open ? `<div class="tile-box"><div class="tiles">${tiles}</div></div>` : ''}`;
+  ${open ? `<div class="tile-box">
+    <div class="pager" data-pager="${key}">
+      ${pages.map(p => `<div class="page"><div class="tiles"
+        style="grid-template-rows:repeat(${rows},auto)">${p.join('')}</div></div>`).join('')}
+    </div>
+    ${pages.length > 1 ? `<div class="dots" data-dots="${key}">
+      ${pages.map((_, i) => `<span class="dot${i===0?' on':''}"></span>`).join('')}
+    </div>` : ''}
+  </div>` : ''}`;
 }
 
 function viewPanel(){
@@ -315,13 +334,13 @@ function viewPanel(){
   const incTot = catTotals('income'), expTot = catTotals('expense');
 
   const incTiles = parents('income').filter(c => !c.hidden)
-    .map(c => tileHTML(c.id, c.name, c.icon, c.color, incTot[c.id]||0, 'cat')).join('');
+    .map(c => tileHTML(c.id, c.name, c.icon, c.color, incTot[c.id]||0, 'cat'));
   const expTiles = parents('expense').filter(c => !c.hidden)
-    .map(c => tileHTML(c.id, c.name, c.icon, c.color, expTot[c.id]||0, 'cat')).join('');
+    .map(c => tileHTML(c.id, c.name, c.icon, c.color, expTot[c.id]||0, 'cat'));
 
   const ws = myWallets().filter(w => !w.hidden && (S.showDebt || w.kind !== 'debt'));
   const walTiles = ws.map(w =>
-    tileHTML(w.id, w.name, w.icon, w.color, walletBalance(w.id), 'wallet')).join('');
+    tileHTML(w.id, w.name, w.icon, w.color, walletBalance(w.id), 'wallet'));
 
   // Долги — это обязательства, а не деньги в кармане, поэтому в итог не идут
   const walTotal = myWallets()
@@ -335,9 +354,9 @@ function viewPanel(){
     <button class="round-btn" data-go-tab="settings">•••</button>
   </div>
   <div class="wrap">
-    ${sectionHTML('income','Доходы', sumOf('income'), incTiles)}
-    ${sectionHTML('wallets','Кошельки', walTotal, walTiles)}
-    ${sectionHTML('expense','Расходы', sumOf('expense'), expTiles)}
+    ${sectionHTML('income','Доходы', sumOf('income'), incTiles, 2)}
+    ${sectionHTML('wallets','Кошельки', walTotal, walTiles, 2)}
+    ${sectionHTML('expense','Расходы', sumOf('expense'), expTiles, 3)}
     ${!parents('expense').length ? '<div class="empty">Категорий пока нет.<br>Добавьте их в настройках.</div>' : ''}
   </div>`;
 }
@@ -1148,6 +1167,7 @@ function bind(){
 
   // --- панель: касание и перетаскивание плиток ---
   bindTileDrag();
+  bindPagers();
   on('#fab', () => openOpSheet());
 
   // --- история ---
@@ -1418,6 +1438,18 @@ function bindSheet(){
     S.ops.filter(o => o.profileId === S.profileId).forEach(o => fbDel(COL.ops, o.id));
     S.ops = S.ops.filter(o => o.profileId !== S.profileId);
     setS({sheet:null});
+  });
+}
+
+// Точки под секцией показывают, на какой странице плиток мы находимся
+function bindPagers(){
+  $$('.pager').forEach(pager => {
+    const dots = document.querySelector(`[data-dots="${pager.dataset.pager}"]`);
+    if(!dots) return;
+    pager.addEventListener('scroll', () => {
+      const i = Math.round(pager.scrollLeft / Math.max(1, pager.clientWidth));
+      Array.from(dots.children).forEach((d, n) => d.classList.toggle('on', n === i));
+    }, {passive:true});
   });
 }
 
