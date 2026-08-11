@@ -144,6 +144,7 @@ let S = {
   showDebt: LS.get('showDebt', true),
   search:'',
   reportKind:'expense',              // expense | income | both
+  debtFilter:'all',                  // i | me | all
   sheet:null,                        // {mode, ...}
   monthPicker:false,
 };
@@ -186,10 +187,16 @@ const monthOps = (mkey = curMk()) =>
 function walletBalance(id){
   const w = wallet(id);
   if(!w) return 0;
+  // Кошелёк «Долги» — не хранилище денег, а сводка: сколько вам должны минус ваши долги
+  if(w.kind === 'debt') return debtTotal();
+
   let bal = Number(w.initialBalance) || 0;
   for(const o of S.ops){
     if(o.type === 'expense' && o.walletId === id) bal -= o.amount;
     else if(o.type === 'income' && o.walletId === id) bal += o.amount;
+    else if(o.type === 'debt' && o.walletId === id){
+      bal += (DEBT_DIR[o.debtDir]?.wallet || 0) * o.amount;
+    }
     else if(o.type === 'transfer'){
       if(o.walletId === id) bal -= o.amount;
       if(o.toWalletId === id) bal += (o.amountTo ?? o.amount);
@@ -397,6 +404,10 @@ function viewPanel(){
 // ==================== ИСТОРИЯ ====================
 
 function opTitle(o){
+  if(o.type === 'debt'){
+    const d = DEBT_DIR[o.debtDir];
+    return `${d ? d.label : 'Долг'}: ${o.person || '—'}`;
+  }
   if(o.type === 'transfer'){
     const a = wallet(o.walletId), b = wallet(o.toWalletId);
     return `${a?a.name:'—'} → ${b?b.name:'—'}`;
@@ -410,6 +421,7 @@ function opTitle(o){
   return c.name;
 }
 function opVisual(o){
+  if(o.type === 'debt') return {icon:'🤝', color:'#af52de'};
   if(o.type === 'transfer') return {icon:'↔️', color:'#8e8e93'};
   const c = cat(o.catId);
   if(!c) return {icon:'💼', color:'#8e8e93'};
@@ -451,8 +463,12 @@ function viewHistory(){
     ${ops.map(o => {
       const v = opVisual(o);
       const w = wallet(o.walletId);
-      const col = o.type==='income' ? 'var(--green)' : o.type==='transfer' ? 'var(--muted)' : 'var(--text)';
-      const pre = o.type==='income' ? '+' : o.type==='expense' ? '−' : '';
+      const dw = o.type==='debt' ? (DEBT_DIR[o.debtDir]?.wallet || 0) : 0;
+      const col = o.type==='income' ? 'var(--green)'
+                : o.type==='debt' ? (dw>0 ? 'var(--green)' : 'var(--red)')
+                : o.type==='transfer' ? 'var(--muted)' : 'var(--text)';
+      const pre = o.type==='income' ? '+' : o.type==='expense' ? '−'
+                : o.type==='debt' ? (dw>0 ? '+' : '−') : '';
       return `<button class="op" data-edit-op="${o.id}">
         <div class="op-icon" style="background:${v.color}">${v.icon}</div>
         <div class="op-main">
@@ -1096,6 +1112,155 @@ function sheetPanel(){
   `);
 }
 
+// ==================== ДОЛГИ ====================
+// Долг — не трата: деньги не исчезли, а сменили владельца. Поэтому отдельный
+// тип операции, который не попадает ни в расходы, ни в доходы.
+
+const DEBT_DIR = {
+  lent:            {label:'Я дал',      wallet:-1, owed:+1},
+  returned_to_me:  {label:'Мне вернули', wallet:+1, owed:-1},
+  borrowed:        {label:'Мне дали',   wallet:+1, owed:-1},
+  returned_by_me:  {label:'Я вернул',   wallet:-1, owed:+1},
+};
+
+const debtOps = () => S.ops.filter(o => o.profileId === S.profileId && o.type === 'debt');
+
+// Плюс — должны мне, минус — должен я
+function personBalance(name){
+  return debtOps()
+    .filter(o => o.person === name)
+    .reduce((s,o) => s + (DEBT_DIR[o.debtDir]?.owed || 0) * o.amount, 0);
+}
+
+function debtPeople(){
+  const names = [...new Set(debtOps().map(o => o.person).filter(Boolean))];
+  return names.map(name => {
+    const ops = debtOps().filter(o => o.person === name)
+      .sort((a,b) => new Date(b.date) - new Date(a.date));
+    return {name, balance: personBalance(name), last: ops[0], count: ops.length};
+  }).sort((a,b) => Math.abs(b.balance) - Math.abs(a.balance));
+}
+
+const debtTotal = () => debtPeople().reduce((s,p) => s + p.balance, 0);
+
+function viewDebts(){
+  const filter = S.debtFilter || 'all';
+  const all = debtPeople();
+  const list = all.filter(p =>
+    filter === 'i'  ? p.balance < 0 :
+    filter === 'me' ? p.balance > 0 : p.balance !== 0 || p.count);
+
+  const shown = filter === 'i'  ? all.filter(p => p.balance < 0).reduce((s,p)=>s+p.balance,0)
+              : filter === 'me' ? all.filter(p => p.balance > 0).reduce((s,p)=>s+p.balance,0)
+              : debtTotal();
+
+  return sheetWrap('Долги', `
+    <div class="seg">
+      <button class="${filter==='i'?'on':''}" data-debt-filter="i">Я должен</button>
+      <button class="${filter==='me'?'on':''}" data-debt-filter="me">Мне должны</button>
+      <button class="${filter==='all'?'on':''}" data-debt-filter="all">Все</button>
+    </div>
+
+    <div class="big-sum">
+      <div class="v" style="color:${shown>0?'var(--green)':shown<0?'var(--red)':'var(--text)'}">
+        ${shown>0?'+':''}${fmt(shown)} ${mainSign()}</div>
+      <div class="l" style="margin-top:6px">
+        ${shown>0 ? 'должны вам' : shown<0 ? 'должны вы' : 'всё сведено'}</div>
+    </div>
+
+    ${list.length ? list.map(p => {
+      const d = p.last ? new Date(p.last.date) : null;
+      const dir = p.last ? DEBT_DIR[p.last.debtDir] : null;
+      return `<button class="op" data-debt-person="${esc(p.name)}" style="width:100%">
+        <div class="op-icon" style="background:var(--surface2);color:${p.balance>=0?'var(--green)':'var(--red)'};font-weight:700">
+          ${esc(p.name[0].toUpperCase())}</div>
+        <div class="op-main">
+          <div class="op-title">${esc(p.name)}</div>
+          <div class="op-note">${dir ? `${dir.label} ${fmt(p.last.amount)} ${mainSign()}, ${d.getDate()} ${MONTHS_GEN[d.getMonth()]}` : ''}</div>
+        </div>
+        <div class="op-amt" style="color:${p.balance>0?'var(--green)':p.balance<0?'var(--red)':'var(--muted)'}">
+          ${p.balance>0?'+':''}${fmt(p.balance)} ${mainSign()}</div>
+      </button>`;
+    }).join('') : '<div class="empty">Здесь пока пусто.<br>Добавьте первую запись.</div>'}
+
+    <button class="btn" id="newDebt" style="margin-top:18px">+ Новая запись</button>
+  `);
+}
+
+function viewDebtPerson(){
+  const name = S.sheet.person;
+  const bal = personBalance(name);
+  const ops = debtOps().filter(o => o.person === name)
+    .sort((a,b) => new Date(b.date) - new Date(a.date));
+
+  return sheetWrap(esc(name), `
+    <div class="big-sum">
+      <div class="v" style="color:${bal>0?'var(--green)':bal<0?'var(--red)':'var(--text)'}">
+        ${bal>0?'+':''}${fmt(bal)} ${mainSign()}</div>
+      <div class="l" style="margin-top:6px">
+        ${bal>0 ? 'должен вам' : bal<0 ? 'должны вы' : 'рассчитались'}</div>
+    </div>
+
+    <div class="chips" style="margin-bottom:18px">
+      ${Object.entries(DEBT_DIR).map(([k,v]) =>
+        `<button class="chip" data-debt-quick="${k}">${v.label}</button>`).join('')}
+    </div>
+
+    <div class="field-l">История</div>
+    ${ops.map(o => {
+      const d = new Date(o.date);
+      const dir = DEBT_DIR[o.debtDir];
+      const w = wallet(o.walletId);
+      return `<button class="op" data-edit-debt="${o.id}" style="width:100%">
+        <div class="op-main">
+          <div class="op-title">${dir.label}</div>
+          <div class="op-note">${d.getDate()} ${MONTHS_GEN[d.getMonth()]} ${d.getFullYear()}${w ? ' · '+esc(w.name) : ''}${o.note ? ' · '+esc(o.note) : ''}</div>
+        </div>
+        <div class="op-amt" style="color:${dir.owed>0?'var(--green)':'var(--red)'}">
+          ${dir.owed>0?'+':'−'}${fmt(o.amount)} ${mainSign()}</div>
+      </button>`;
+    }).join('')}
+  `, `<button class="x" id="debtBack">‹</button>`);
+}
+
+function viewDebtForm(){
+  const s = S.sheet;
+  const ws = myWallets().filter(w => w.kind !== 'debt');
+  const names = [...new Set(debtOps().map(o => o.person).filter(Boolean))];
+
+  return sheetWrap(s.id ? 'Запись о долге' : 'Новая запись', `
+    <div class="field-l">Что произошло</div>
+    <div class="chips" style="margin-bottom:18px">
+      ${Object.entries(DEBT_DIR).map(([k,v]) =>
+        `<button class="chip${s.debtDir===k?' on':''}" data-debt-dir="${k}">${v.label}</button>`).join('')}
+    </div>
+
+    <input class="amount-in" id="debtAmt" type="number" inputmode="decimal"
+      placeholder="0" value="${s.amount||''}"/>
+    <div class="amount-lbl" style="margin:-10px 0 18px">Сумма</div>
+
+    <div class="field-l">Кто</div>
+    <input class="inp" id="debtPerson" placeholder="Имя" value="${esc(s.person||'')}" style="margin-bottom:8px"/>
+    ${names.length ? `<div class="chips" style="margin-bottom:18px">
+      ${names.map(n => `<button class="chip" data-debt-name="${esc(n)}">${esc(n)}</button>`).join('')}
+    </div>` : '<div style="margin-bottom:18px"></div>'}
+
+    <div class="field-l">Кошелёк</div>
+    <div class="chips" style="margin-bottom:18px">
+      ${ws.map(w => `<button class="chip${s.walletId===w.id?' on':''}" data-debt-wallet="${w.id}">${w.icon} ${esc(w.name)}</button>`).join('')}
+    </div>
+
+    <div class="field-l">Дата</div>
+    <input class="inp" id="debtDate" type="datetime-local" value="${s.date}" style="margin-bottom:18px"/>
+
+    <div class="field-l">Комментарий</div>
+    <input class="inp" id="debtNote" placeholder="необязательно" value="${esc(s.note||'')}" style="margin-bottom:18px"/>
+
+    <button class="btn" id="saveDebt">Сохранить</button>
+    ${s.id ? `<button class="btn danger" id="deleteDebt" style="margin-top:8px">Удалить запись</button>` : ''}
+  `, `<button class="x" id="debtBack">‹</button>`);
+}
+
 function renderSheet(){
   if(!S.sheet) return '';
   switch(S.sheet.mode){
@@ -1106,6 +1271,9 @@ function renderSheet(){
     case 'wallets':  return sheetWallets();
     case 'cats':     return sheetCats();
     case 'panel':    return sheetPanel();
+    case 'debts':      return viewDebts();
+    case 'debtPerson': return viewDebtPerson();
+    case 'debtForm':   return viewDebtForm();
     case 'wipe':     return sheetWipe();
     default:         return '';
   }
@@ -1288,6 +1456,21 @@ function renderKeepFocus(){
   const inp = $('#searchInp');
   if(inp){ inp.focus(); try { inp.setSelectionRange(pos, pos); } catch {} }
 }
+
+function openDebtForm(patch = {}){
+  const ws = myWallets().filter(w => w.kind !== 'debt');
+  return {mode:'debtForm', id:null, debtDir:'lent', person:'', amount:'',
+    walletId: ws[0]?.id || null, note:'', date: localInput(new Date()), ...patch};
+}
+function readDebtInputs(){
+  const s = S.sheet;
+  if(!s || s.mode !== 'debtForm') return;
+  s.amount = $('#debtAmt')?.value ?? s.amount;
+  s.person = $('#debtPerson')?.value ?? s.person;
+  s.note   = $('#debtNote')?.value ?? s.note;
+  s.date   = $('#debtDate')?.value || s.date;
+}
+const patchDebt = patch => { readDebtInputs(); setS({sheet:{...S.sheet, ...patch}}); };
 
 function bindSheet(){
   const close = () => setS({sheet:null});
@@ -1516,6 +1699,42 @@ function bindSheet(){
   on('[data-panel-kind]', el => setS({sheet:{...S.sheet, panelKind: el.dataset.panelKind}}));
   bindPanelDrag();
 
+  // ---- долги ----
+  on('[data-debt-filter]', el => setS({debtFilter: el.dataset.debtFilter}));
+  on('#debtBack', () => setS({sheet:{mode:'debts'}}));
+  on('[data-debt-person]', el => setS({sheet:{mode:'debtPerson', person: el.dataset.debtPerson}}));
+  on('#newDebt', () => setS({sheet:openDebtForm()}));
+  on('[data-debt-quick]', el => setS({sheet:openDebtForm({
+    debtDir: el.dataset.debtQuick, person: S.sheet.person})}));
+  on('[data-edit-debt]', el => {
+    const o = S.ops.find(x => x.id === el.dataset.editDebt);
+    if(!o) return;
+    setS({sheet:{mode:'debtForm', id:o.id, debtDir:o.debtDir, person:o.person,
+      amount:o.amount, walletId:o.walletId, note:o.note||'', date: localInput(new Date(o.date))}});
+  });
+  on('[data-debt-dir]', el => patchDebt({debtDir: el.dataset.debtDir}));
+  on('[data-debt-wallet]', el => patchDebt({walletId: el.dataset.debtWallet}));
+  on('[data-debt-name]', el => patchDebt({person: el.dataset.debtName}));
+  on('#saveDebt', () => {
+    readDebtInputs();
+    const s = S.sheet;
+    const amount = Number(s.amount);
+    if(!amount || amount <= 0){ alert('Впишите сумму больше нуля'); return; }
+    if(!String(s.person||'').trim()){ alert('Впишите имя'); return; }
+    if(!s.walletId){ alert('Выберите кошелёк'); return; }
+    saveOp({type:'debt', debtDir:s.debtDir, person:s.person.trim(), amount,
+      walletId:s.walletId, catId:null, toWalletId:null, amountTo:null,
+      note:(s.note||'').trim(), date:new Date(s.date).toISOString()}, s.id);
+    setS({sheet:{mode:'debtPerson', person:s.person.trim()}});
+  });
+  on('#deleteDebt', () => {
+    if(!confirm('Удалить эту запись?')) return;
+    const person = S.sheet.person;
+    deleteOp(S.sheet.id);
+    setS({sheet: personBalance(person) || debtOps().some(o => o.person === person)
+      ? {mode:'debtPerson', person} : {mode:'debts'}});
+  });
+
   // ---- очистка ----
   on('#wipeOps', () => {
     if(!confirm('Точно удалить все операции этого профиля?')) return;
@@ -1551,7 +1770,9 @@ function tileMeta(el){
   const id = el.dataset.id;
   if(el.dataset.tile === 'wallet'){
     const w = wallet(id);
-    return w ? {kind:'wallet', id, name:w.name} : null;
+    if(!w) return null;
+    // Долги живут по своим правилам, обычные жесты к ним не применяются
+    return {kind: w.kind === 'debt' ? 'debt' : 'wallet', id, name:w.name};
   }
   const c = cat(id);
   return c ? {kind: c.type, id, name:c.name} : null;
@@ -1560,6 +1781,7 @@ function tileMeta(el){
 // Что получится, если бросить src на dst. null — сочетание бессмысленное.
 function pairing(src, dst){
   if(!src || !dst || src.id === dst.id) return null;
+  if(src.kind === 'debt' || dst.kind === 'debt') return null;   // долги оформляются в своём разделе
   const w = src.kind === 'wallet' ? src : dst.kind === 'wallet' ? dst : null;
   const other = w === src ? dst : src;
 
@@ -1674,8 +1896,10 @@ function onDragEnd(){
 
   if(!armed){
     // Обычное касание — прежнее поведение: открыть форму по плитке
-    if(meta.kind === 'wallet'){
-      const ws = myWallets();
+    if(meta.kind === 'debt'){
+      setS({sheet:{mode:'debts'}});
+    } else if(meta.kind === 'wallet'){
+      const ws = myWallets().filter(w => w.kind !== 'debt');
       openOpSheet({type:'transfer', walletId:meta.id,
                    toWalletId:(ws.find(w => w.id !== meta.id) || {}).id});
     } else {
@@ -1893,7 +2117,7 @@ function bindPanelDrag(){
 
 function exportCsv(){
   const rows = [['Дата','Тип','Категория','Подкатегория','Кошелёк','Сумма','Валюта','Примечание']];
-  const typeName = {expense:'Расход', income:'Доход', transfer:'Перевод'};
+  const typeName = {expense:'Расход', income:'Доход', transfer:'Перевод', debt:'Долг'};
   S.ops.filter(o => o.profileId === S.profileId)
     .slice().sort((a,b) => new Date(a.date) - new Date(b.date))
     .forEach(o => {
@@ -1903,8 +2127,8 @@ function exportCsv(){
       rows.push([
         new Date(o.date).toLocaleString('ru-RU'),
         typeName[o.type] || o.type,
-        parent ? parent.name : (c ? c.name : ''),
-        parent ? c.name : '',
+        o.type === 'debt' ? (DEBT_DIR[o.debtDir]?.label || 'Долг') : (parent ? parent.name : (c ? c.name : '')),
+        o.type === 'debt' ? (o.person || '') : (parent ? c.name : ''),
         o.type === 'transfer' ? `${w?w.name:''} → ${wallet(o.toWalletId)?.name || ''}` : (w ? w.name : ''),
         o.amount,
         w ? w.currency : S.mainCurrency,
