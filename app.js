@@ -184,11 +184,15 @@ const childrenOf = pid => S.cats.filter(c=>c.parentId===pid).sort((a,b)=>(a.orde
 const monthOps = (mkey = curMk()) =>
   S.ops.filter(o => o.profileId===S.profileId && o.monthKey===mkey);
 
+// Кошелёк долгов: признак kind мог не сохраниться у старых записей,
+// поэтому подстраховываемся названием
+const isDebtWallet = w => !!w && (w.kind === 'debt' || /^\s*долг/i.test(w.name || ''));
+
 function walletBalance(id){
   const w = wallet(id);
   if(!w) return 0;
   // Кошелёк «Долги» — не хранилище денег, а сводка: сколько вам должны минус ваши долги
-  if(w.kind === 'debt') return debtTotal();
+  if(isDebtWallet(w)) return debtTotal();
 
   let bal = Number(w.initialBalance) || 0;
   for(const o of S.ops){
@@ -253,6 +257,9 @@ async function loadAll(){
     const prev = S.profileId;
     S.profileId = p.id;
     dedupeCategories();                          // подчищаем следы прошлых гонок
+    // Проставляем признак долгового кошелька, если он потерялся
+    S.wallets.filter(w => w.profileId === p.id && w.kind !== 'debt' && isDebtWallet(w))
+      .forEach(w => { w.kind = 'debt'; fbUpd(COL.wallets, w.id, {kind:'debt'}); });
     if(p.treeV !== TREE_VERSION){
       applyExpenseTree();
       dedupeCategories();
@@ -378,13 +385,13 @@ function viewPanel(){
   const expTiles = parents('expense').filter(c => !c.hidden)
     .map(c => tileHTML(c.id, c.name, c.icon, c.color, expTot[c.id]||0, 'cat'));
 
-  const ws = myWallets().filter(w => !w.hidden && (S.showDebt || w.kind !== 'debt'));
+  const ws = myWallets().filter(w => !w.hidden && (S.showDebt || !isDebtWallet(w)));
   const walTiles = ws.map(w =>
     tileHTML(w.id, w.name, w.icon, w.color, walletBalance(w.id), 'wallet'));
 
   // Долги — это обязательства, а не деньги в кармане, поэтому в итог не идут
   const walTotal = myWallets()
-    .filter(w => w.kind !== 'debt')
+    .filter(w => !isDebtWallet(w))
     .reduce((s,w) => s + toKZT(walletBalance(w.id), w.currency), 0);
 
   return `
@@ -1012,7 +1019,7 @@ function sheetWallets(){
         <div class="op-icon" style="background:${w.color};width:38px;height:38px;font-size:17px;margin-right:12px">${w.icon}</div>
         <div class="row-main">
           <div class="row-title">${esc(w.name)}</div>
-          <div class="row-sub">${w.currency}${w.kind==='debt'?' · долги':''}</div>
+          <div class="row-sub">${w.currency}${isDebtWallet(w)?' · долги':''}</div>
         </div>
         <div style="font-weight:700">${fmt(walletBalance(w.id))} ${sign(w.currency)}</div>
         <span class="row-go">›</span>
@@ -1225,7 +1232,7 @@ function viewDebtPerson(){
 
 function viewDebtForm(){
   const s = S.sheet;
-  const ws = myWallets().filter(w => w.kind !== 'debt');
+  const ws = myWallets().filter(w => !isDebtWallet(w));
   const names = [...new Set(debtOps().map(o => o.person).filter(Boolean))];
 
   return sheetWrap(s.id ? 'Запись о долге' : 'Новая запись', `
@@ -1458,7 +1465,7 @@ function renderKeepFocus(){
 }
 
 function openDebtForm(patch = {}){
-  const ws = myWallets().filter(w => w.kind !== 'debt');
+  const ws = myWallets().filter(w => !isDebtWallet(w));
   return {mode:'debtForm', id:null, debtDir:'lent', person:'', amount:'',
     walletId: ws[0]?.id || null, note:'', date: localInput(new Date()), ...patch};
 }
@@ -1772,7 +1779,7 @@ function tileMeta(el){
     const w = wallet(id);
     if(!w) return null;
     // Долги живут по своим правилам, обычные жесты к ним не применяются
-    return {kind: w.kind === 'debt' ? 'debt' : 'wallet', id, name:w.name};
+    return {kind: isDebtWallet(w) ? 'debt' : 'wallet', id, name:w.name};
   }
   const c = cat(id);
   return c ? {kind: c.type, id, name:c.name} : null;
@@ -1899,7 +1906,7 @@ function onDragEnd(){
     if(meta.kind === 'debt'){
       setS({sheet:{mode:'debts'}});
     } else if(meta.kind === 'wallet'){
-      const ws = myWallets().filter(w => w.kind !== 'debt');
+      const ws = myWallets().filter(w => !isDebtWallet(w));
       openOpSheet({type:'transfer', walletId:meta.id,
                    toWalletId:(ws.find(w => w.id !== meta.id) || {}).id});
     } else {
