@@ -299,11 +299,11 @@ function tileHTML(id, name, icon, color, value, kind){
 }
 
 function addTileHTML(what){
-  const label = what === 'wallets' ? 'Новый кошелёк' : 'Новая категория';
-  return `<button class="tile" data-add-tile="${what}">
-    <div class="tile-name">${label}</div>
+  const label = what === 'wallets' ? 'Добавить кошелёк' : 'Добавить категорию';
+  // Пустая подпись — распорка, чтобы кружок встал вровень с соседними
+  return `<button class="tile" data-add-tile="${what}" aria-label="${label}" title="${label}">
+    <div class="tile-name"></div>
     <div class="tile-icon add">+</div>
-    <div class="tile-val zero">&nbsp;</div>
   </button>`;
 }
 
