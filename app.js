@@ -1,7 +1,7 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
-  collection, getDocs, doc, setDoc, deleteDoc, updateDoc
+  collection, getDocs, getDocsFromCache, doc, setDoc, deleteDoc, updateDoc
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 import {
   getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect,
@@ -128,7 +128,7 @@ const LS = {
 };
 
 let S = {
-  ready:false, syncing:false,
+  ready:false, syncing:false, offline:false,
   authReady:false, user:null, authError:'', signingIn:false,
   tab:'panel',                       // panel | history | report | settings
   month:today.getMonth(), year:today.getFullYear(),
@@ -234,13 +234,25 @@ function dayFactor(){
 
 // ============ загрузка и посев ============
 
+// Без сети getDocs не падает с ошибкой, а ждёт сервер бесконечно —
+// поэтому ограничиваем ожидание и переключаемся на локальную базу.
+async function readCol(name){
+  const ref = collection(db, name);
+  try {
+    return await Promise.race([
+      getDocs(ref),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000)),
+    ]);
+  } catch(e) {
+    S.offline = true;
+    return await getDocsFromCache(ref);   // упадёт только если кэша ещё нет
+  }
+}
+
 async function loadAll(){
   const [pSnap, wSnap, cSnap, oSnap, bSnap] = await Promise.all([
-    getDocs(collection(db, COL.profiles)),
-    getDocs(collection(db, COL.wallets)),
-    getDocs(collection(db, COL.cats)),
-    getDocs(collection(db, COL.ops)),
-    getDocs(collection(db, COL.budgets)),
+    readCol(COL.profiles), readCol(COL.wallets), readCol(COL.cats),
+    readCol(COL.ops), readCol(COL.budgets),
   ]);
   const pick = snap => { const a=[]; snap.forEach(d=>a.push({...d.data(), id:d.id})); return a; };
   S.profiles = pick(pSnap).sort((a,b)=>(a.order||0)-(b.order||0));
@@ -1355,7 +1367,9 @@ function render(){
   ];
 
   root.innerHTML = `
-    ${S.syncing ? '<div class="sync">Сохранение…</div>' : ''}
+    ${S.offline || !navigator.onLine
+      ? '<div class="sync" style="background:var(--surface2);color:var(--muted)">Офлайн · записи уйдут в облако позже</div>'
+      : S.syncing ? '<div class="sync">Сохранение…</div>' : ''}
     ${screen}
     <nav class="tabbar"><div class="tabbar-in">
       ${tabs.map(([t,ic,l]) => `<button class="tab${S.tab===t?' on':''}" data-go-tab="${t}">
@@ -2209,6 +2223,10 @@ if('serviceWorker' in navigator){
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(()=>{}));
 }
 
+// Полоска про офлайн должна исчезать сама, как только связь вернулась
+window.addEventListener('online',  () => setS({offline:false}));
+window.addEventListener('offline', () => setS({offline:true}));
+
 render();
 
 getRedirectResult(auth).catch(err => setS({authError: authMessage(err)}));
@@ -2240,8 +2258,11 @@ onAuthStateChanged(auth, async user => {
     S.ready = true;
     render();
   } catch(err){
-    document.getElementById('app').innerHTML =
-      `<div class="empty">Не удалось загрузить данные.<br>${esc(err.message)}<br><br>
-       Проверьте правила Firestore и обновите страницу.</div>`;
+    const noNet = !navigator.onLine || /offline|unavailable|timeout|cache/i.test(err.message || '');
+    document.getElementById('app').innerHTML = noNet
+      ? `<div class="empty">Нет связи, а данные ещё не сохранены на устройстве.<br><br>
+         Откройте приложение один раз с интернетом — дальше оно будет работать и без него.</div>`
+      : `<div class="empty">Не удалось загрузить данные.<br>${esc(err.message)}<br><br>
+         Проверьте правила Firestore и обновите страницу.</div>`;
   }
 });
