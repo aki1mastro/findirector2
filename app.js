@@ -67,35 +67,43 @@ const PALETTE = ['#5ac8fa','#5e5ce6','#ff6b35','#3b46d4','#ff9ecd','#4a5ae8','#a
   '#ff453a','#30d158','#af52de','#ffd60a','#ff9f0a','#64d2ff','#bf5af2','#8e8e93'];
 
 const ICONS = ['🛒','🏠','🧾','👑','🥤','🚕','🍔','🧳','📱','💊','🚗','⛽','👔','🪥','🎁','💳','🕌','🎉',
-  '🍖','📚','🎮','🚨','💕','💼','☕','🅿️','🛁','🔨','💰','🎖','💹','🏝','💻','👛','🏦','🕵️','✈️','🐣'];
+  '🍖','📚','🎮','🚨','💕','💼','☕','🅿️','🛁','🔨','💰','🎖','💹','🏝','💻','👛','🏦','🕵️','✈️','🐣','💍','⛏','🧾','🥤','🚗','⛽'];
 
-// Стандартные категории расходов. sub — подкатегории, создаются вместе с родителем.
-const DEF_EXP = [
-  {n:'Продукты',       i:'🛒', c:'#5ac8fa', sub:['Мясо','Овощи и фрукты','Вода','Хозтовары']},
-  {n:'Все для дома',   i:'🏠', c:'#5e5ce6', sub:['Ремонт','Мебель','Бытовое']},
-  {n:'Коммуслуги',     i:'🧾', c:'#ff6b35', sub:['Свет','Газ','Вода','Интернет','Аренда']},
-  {n:'Семья',          i:'👑', c:'#3b46d4', sub:['Али','Мама','Ата','Родные']},
-  {n:'Еда',            i:'🍔', c:'#a4d233', sub:['Кафе','Обед','Доставка','Фастфуд']},
-  {n:'Напитки',        i:'🥤', c:'#ff9ecd', sub:['Кофе','Вода','Газировка']},
-  {n:'Транспорт',      i:'🚕', c:'#4a5ae8', sub:['Такси','Парковка','Автобус']},
-  {n:'Авто',           i:'🚗', c:'#ff453a', sub:['Ремонт','Мойка','Страховка','Техосмотр']},
-  {n:'Бензин',         i:'⛽', c:'#32ade6', sub:[]},
-  {n:'Тарифы',         i:'📱', c:'#1e4fd8', sub:['Связь','Подписки']},
-  {n:'Здоровье',       i:'💊', c:'#ff3b30', sub:['Аптека','Врач','Стоматолог']},
-  {n:'Одежда',         i:'👔', c:'#ffd60a', sub:[]},
-  {n:'Гигиена',        i:'🪥', c:'#30d158', sub:['Стрижка']},
-  {n:'Подарки',        i:'🎁', c:'#ff9ecd', sub:['Коримдік','Сүйінші']},
-  {n:'Кредиты',        i:'💳', c:'#ff453a', sub:['Каспи','Халык','Рассрочка']},
-  {n:'Пожертвования',  i:'🕌', c:'#a4d233', sub:[]},
-  {n:'Праздники',      i:'🎉', c:'#bf5af2', sub:['Той','День рождения']},
-  {n:'Ас',             i:'🍖', c:'#ff6b35', sub:['Дастархан','Қонақасы']},
-  {n:'Образование',    i:'📚', c:'#64d2ff', sub:['Книги','Курсы']},
-  {n:'Развлечения',    i:'🎮', c:'#af52de', sub:['Кино','Спорт']},
-  {n:'Спа/Баня',       i:'🛁', c:'#64d2ff', sub:[]},
-  {n:'Девушка',        i:'💕', c:'#ff9ecd', sub:[]},
-  {n:'Штрафы',         i:'🚨', c:'#ff453a', sub:[]},
-  {n:'Прочее',         i:'💼', c:'#8e8e93', sub:[]},
+// Категории расходов по умолчанию.
+// Сбережений и погашения кредитов здесь намеренно нет: это переводы между
+// кошельками, а не траты. Иначе расходы за месяц выглядят больше реальных.
+const EXPENSE_TREE = [
+  {n:'Жильё и ЖКХ', i:'🏠', c:'#5e5ce6',
+   sub:['Аренда/Ипотека','Квартплата и счета','Связь и интернет','Быт и расходники']},
+  {n:'Питание', i:'🛒', c:'#5ac8fa',
+   sub:['Продукты','Кафе и рестораны','Доставка еды','Кофе и перекусы']},
+  {n:'Транспорт', i:'🚕', c:'#4a5ae8',
+   sub:['Общественный транспорт','Такси/Каршеринг','Топливо','Сервис и ремонт']},
+  {n:'Здоровье и красота', i:'💊', c:'#ff453a',
+   sub:['Медицина/Аптека','Уход и косметика','Салон','Спорт']},
+  {n:'Одежда и стиль', i:'👔', c:'#ffd60a',
+   sub:['Одежда','Обувь','Аксессуары']},
+  {n:'Развлечения и досуг', i:'🎮', c:'#af52de',
+   sub:['Кино/Театр/Выставки','Хобби и развитие','Подписки','Путешествия']},
+  {n:'Сабина', i:'💕', c:'#ff9ecd',
+   sub:['Салон и уход','Одежда и украшения','Совместный досуг','Цветы и подарки']},
+  {n:'Семья и родные', i:'👑', c:'#3b46d4',
+   sub:['Родителям','Братья и сёстры','Поездки к своим']},
+  {n:'Той и традиции', i:'🎉', c:'#ff6b35',
+   sub:['Коримдік','Сүйінші','Ас/Дастархан','Подарки на той']},
+  {n:'Свадьба', i:'💍', c:'#ff2d55',
+   sub:['Тойхана','Наряды','Кольца','Фото и видео','Ведущий и музыка']},
+  {n:'Вахта', i:'⛏', c:'#32ade6',
+   sub:['Дорога','Спецодежда','Еда в пути']},
+  {n:'Финансы и прочее', i:'💼', c:'#8e8e93',
+   sub:['Налоги','Комиссии банка','Непредвиденное','Благотворительность']},
 ];
+
+// sub — подкатегории, создаются вместе с родителем
+// Номер версии набора: увеличивается, если структура категорий меняется
+const TREE_VERSION = 1;
+
+const DEF_EXP = EXPENSE_TREE.map(n => ({n:n.n, i:n.i, c:n.c, sub:n.sub}));
 
 const DEF_INC = [
   {n:'Зарплата',  i:'💰', c:'#a4d233', sub:['Аванс','Основная']},
@@ -106,6 +114,7 @@ const DEF_INC = [
   {n:'Подарок',   i:'🎁', c:'#bf5af2', sub:[]},
   {n:'Прочее',    i:'💵', c:'#8e8e93', sub:[]},
 ];
+
 
 const DEF_WALLETS = [
   {n:'Наличные',      i:'👛', c:'#5ac8fa', kind:'normal'},
@@ -230,12 +239,24 @@ async function loadAll(){
   if(!S.profiles.length) seedProfile('Личный', 'Л');
   if(!S.profiles.some(p=>p.id===S.profileId)) S.profileId = S.profiles[0].id;
   LS.set('profile', S.profileId);
+
+  // Разовое обновление структуры категорий для профилей, заведённых раньше.
+  // Метка treeV на профиле не даёт повториться при следующих запусках.
+  for(const p of S.profiles){
+    if(p.treeV === TREE_VERSION) continue;
+    const prev = S.profileId;
+    S.profileId = p.id;
+    applyExpenseTree();
+    S.profileId = prev;
+    p.treeV = TREE_VERSION;
+    fbUpd(COL.profiles, p.id, {treeV: TREE_VERSION});
+  }
 }
 
 function seedProfile(name, icon){
   const pid = uid();
-  const p = {id:pid, name, icon, order:S.profiles.length};
-  fbSet(COL.profiles, pid, {name, icon, order:p.order});
+  const p = {id:pid, name, icon, order:S.profiles.length, treeV:TREE_VERSION};
+  fbSet(COL.profiles, pid, {name, icon, order:p.order, treeV:TREE_VERSION});
   S.profiles = [...S.profiles, p];
 
   DEF_WALLETS.forEach((w, i) => {
@@ -1639,6 +1660,70 @@ function cleanupDrag(){
   drag = null;
   // на случай, если копия осталась от прерванного жеста
   document.querySelectorAll('.tile-ghost, .drag-hint').forEach(el => el.remove());
+}
+
+// Ставит набор EXPENSE_TREE. Категории с операциями не трогаются никогда —
+// иначе история потеряет привязку. Пустые лишние удаляются, чтобы не мусорить.
+function applyExpenseTree(){
+  // Возвращает сводку; вызывается автоматически при первой загрузке профиля
+  const norm = s => s.trim().toLowerCase();
+  const opsCount = id => S.ops.filter(o => o.catId === id).length;
+  const mine = S.cats.filter(c => c.profileId === S.profileId && c.type === 'expense');
+
+  let added = 0, kept = 0, removed = 0;
+
+  EXPENSE_TREE.forEach((node, i) => {
+    let parent = mine.find(c => !c.parentId && norm(c.name) === norm(node.n));
+    if(parent){
+      fbUpd(COL.cats, parent.id, {icon:node.i, color:node.c, order:i});
+      Object.assign(parent, {icon:node.i, color:node.c, order:i});
+    } else {
+      const data = {profileId:S.profileId, type:'expense', name:node.n,
+        icon:node.i, color:node.c, parentId:null, order:i};
+      parent = {...data, id: fbAdd(COL.cats, data)};
+      S.cats.push(parent);
+      mine.push(parent);
+      added++;
+    }
+    node.sub.forEach((sn, j) => {
+      const exists = S.cats.find(c => c.parentId === parent.id && norm(c.name) === norm(sn));
+      if(exists){
+        fbUpd(COL.cats, exists.id, {icon:node.i, color:node.c, order:j});
+        Object.assign(exists, {icon:node.i, color:node.c, order:j});
+        return;
+      }
+      const sd = {profileId:S.profileId, type:'expense', name:sn,
+        icon:node.i, color:node.c, parentId:parent.id, order:j};
+      S.cats.push({...sd, id: fbAdd(COL.cats, sd)});
+      added++;
+    });
+  });
+
+  // Всё, чего нет в наборе: пустое убираем, использованное оставляем
+  const wanted = new Set();
+  EXPENSE_TREE.forEach(node => {
+    wanted.add(norm(node.n));
+    node.sub.forEach(sn => wanted.add(norm(node.n) + '/' + norm(sn)));
+  });
+  const isWanted = c => c.parentId
+    ? wanted.has(norm(cat(c.parentId)?.name || '') + '/' + norm(c.name))
+    : wanted.has(norm(c.name));
+
+  const doomed = [];
+  S.cats.filter(c => c.profileId === S.profileId && c.type === 'expense' && !isWanted(c))
+    .forEach(c => {
+      const used = opsCount(c.id) + childrenOf(c.id).reduce((s,k) => s + opsCount(k.id), 0);
+      if(used){ kept++; } else { doomed.push(c); }
+    });
+  doomed.forEach(c => {
+    if(!c.parentId) childrenOf(c.id).forEach(k => { fbDel(COL.cats, k.id); });
+    fbDel(COL.cats, c.id);
+    removed++;
+  });
+  const doomedIds = new Set(doomed.map(c => c.id));
+  S.cats = S.cats.filter(c => !doomedIds.has(c.id) && !doomedIds.has(c.parentId));
+
+  return {added, removed, kept};
 }
 
 // ==================== ПЕРЕТАСКИВАНИЕ ====================
