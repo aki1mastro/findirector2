@@ -1050,17 +1050,8 @@ function bind(){
   on('#profileBtn', () => setS({sheet:{mode:'profiles'}}));
   on('[data-report]', el => setS({reportKind: el.dataset.report}));
 
-  // --- панель ---
-  on('[data-tile]', el => {
-    const {tile, id} = el.dataset;
-    if(tile === 'cat'){
-      const c = cat(id);
-      openOpSheet({type: c.type, catId: id});
-    } else {
-      const ws = myWallets();
-      openOpSheet({type:'transfer', walletId:id, toWalletId:(ws.find(w=>w.id!==id)||{}).id});
-    }
-  });
+  // --- панель: касание и перетаскивание плиток ---
+  bindTileDrag();
   on('#fab', () => openOpSheet());
 
   // --- история ---
@@ -1115,6 +1106,11 @@ function bindSheet(){
   if(!S.sheet) return;
 
   // ---- операция ----
+  if(S.sheet.mode === 'op' && S.sheet.focusAmount){
+    S.sheet.focusAmount = false;          // без setS, чтобы не вызвать перерисовку
+    const amt = $('#opAmt');
+    if(amt) setTimeout(() => amt.focus(), 60);
+  }
   on('[data-op-type]', el => {
     const type = el.dataset.opType;
     const first = parents(type === 'income' ? 'income' : 'expense')[0];
@@ -1293,6 +1289,163 @@ function bindSheet(){
     S.ops = S.ops.filter(o => o.profileId !== S.profileId);
     setS({sheet:null});
   });
+}
+
+// ==================== ЖЕСТ НА ПАНЕЛИ ====================
+// Тянем плитку на плитку: доход → кошелёк, кошелёк → расход, кошелёк → кошелёк.
+
+const LONG_PRESS = 260;   // мс удержания до захвата
+const MOVE_SLOP  = 10;    // px, дальше этого до срабатывания — это скролл, а не жест
+
+let drag = null;
+let dragDocBound = false;
+
+function tileMeta(el){
+  if(!el) return null;
+  const id = el.dataset.id;
+  if(el.dataset.tile === 'wallet'){
+    const w = wallet(id);
+    return w ? {kind:'wallet', id, name:w.name} : null;
+  }
+  const c = cat(id);
+  return c ? {kind: c.type, id, name:c.name} : null;
+}
+
+// Что получится, если бросить src на dst. null — сочетание бессмысленное.
+function pairing(src, dst){
+  if(!src || !dst || src.id === dst.id) return null;
+  const w = src.kind === 'wallet' ? src : dst.kind === 'wallet' ? dst : null;
+  const other = w === src ? dst : src;
+
+  if(src.kind === 'wallet' && dst.kind === 'wallet')
+    return {type:'transfer', walletId:src.id, toWalletId:dst.id,
+            hint:`Перевод: ${src.name} → ${dst.name}`};
+  if(!w) return null;
+  if(other.kind === 'income')
+    return {type:'income', walletId:w.id, catId:other.id,
+            hint:`Доход «${other.name}» в ${w.name}`};
+  if(other.kind === 'expense')
+    return {type:'expense', walletId:w.id, catId:other.id,
+            hint:`Расход «${other.name}» из ${w.name}`};
+  return null;
+}
+
+function bindTileDrag(){
+  const tiles = $$('.tile');
+  if(!tiles.length) return;
+
+  tiles.forEach(tile => {
+    tile.addEventListener('pointerdown', e => {
+      if(e.button && e.button !== 0) return;
+      const meta = tileMeta(tile);
+      if(!meta) return;
+      drag = {tile, meta, x:e.clientX, y:e.clientY, startX:e.clientX, startY:e.clientY,
+              armed:false, ghost:null, hint:null, target:null, pairing:null,
+              timer: setTimeout(() => armDrag(), LONG_PRESS)};
+    });
+  });
+
+  if(dragDocBound) return;
+  dragDocBound = true;
+  document.addEventListener('pointermove', onDragMove, {passive:false});
+  document.addEventListener('pointerup', onDragEnd);
+  document.addEventListener('pointercancel', cancelDrag);
+  // iOS начинает прокрутку сама — глушим её, пока идёт жест
+  document.addEventListener('touchmove', preventWhileDragging, {passive:false});
+}
+
+function preventWhileDragging(e){ if(drag && drag.armed) e.preventDefault(); }
+
+function armDrag(){
+  if(!drag) return;
+  drag.armed = true;
+  document.body.classList.add('dragging-mode');
+  drag.tile.classList.add('drag-src');
+
+  const ghost = drag.tile.cloneNode(true);
+  ghost.className = 'tile tile-ghost';
+  ghost.style.left = drag.x + 'px';
+  ghost.style.top  = drag.y + 'px';
+  document.body.appendChild(ghost);
+  drag.ghost = ghost;
+
+  if(navigator.vibrate) navigator.vibrate(12);
+}
+
+function onDragMove(e){
+  if(!drag) return;
+
+  if(!drag.armed){
+    // Палец уехал раньше срабатывания — значит человек листает страницу
+    if(Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > MOVE_SLOP) cancelDrag();
+    return;
+  }
+
+  e.preventDefault();
+  drag.x = e.clientX; drag.y = e.clientY;
+  drag.ghost.style.left = drag.x + 'px';
+  drag.ghost.style.top  = drag.y + 'px';
+
+  const under = document.elementFromPoint(drag.x, drag.y);
+  const tile = under && under.closest ? under.closest('.tile') : null;
+  const target = tile && tile !== drag.tile ? tile : null;
+
+  if(target !== drag.target){
+    if(drag.target) drag.target.classList.remove('drop-ok');
+    drag.target = target;
+    drag.pairing = target ? pairing(drag.meta, tileMeta(target)) : null;
+    if(drag.pairing) target.classList.add('drop-ok');
+  }
+  showHint(drag.pairing ? drag.pairing.hint : null);
+}
+
+function showHint(text){
+  if(!text){
+    if(drag.hint){ drag.hint.remove(); drag.hint = null; }
+    return;
+  }
+  if(!drag.hint){
+    drag.hint = document.createElement('div');
+    drag.hint.className = 'drag-hint';
+    document.body.appendChild(drag.hint);
+  }
+  drag.hint.textContent = text;
+}
+
+function onDragEnd(){
+  if(!drag) return;
+  const armed = drag.armed, pair = drag.pairing, meta = drag.meta;
+  cleanupDrag();
+
+  if(!armed){
+    // Обычное касание — прежнее поведение: открыть форму по плитке
+    if(meta.kind === 'wallet'){
+      const ws = myWallets();
+      openOpSheet({type:'transfer', walletId:meta.id,
+                   toWalletId:(ws.find(w => w.id !== meta.id) || {}).id});
+    } else {
+      openOpSheet({type: meta.kind, catId: meta.id});
+    }
+    return;
+  }
+
+  if(pair){
+    if(navigator.vibrate) navigator.vibrate(18);
+    openOpSheet({...pair, focusAmount:true});
+  }
+}
+
+function cancelDrag(){ if(drag){ cleanupDrag(); } }
+
+function cleanupDrag(){
+  if(!drag) return;
+  clearTimeout(drag.timer);
+  if(drag.ghost) drag.ghost.remove();
+  if(drag.hint) drag.hint.remove();
+  if(drag.target) drag.target.classList.remove('drop-ok');
+  drag.tile.classList.remove('drag-src');
+  document.body.classList.remove('dragging-mode');
+  drag = null;
 }
 
 // ==================== ПЕРЕТАСКИВАНИЕ ====================

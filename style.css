@@ -170,6 +170,19 @@ select.inp{appearance:none;background-image:none}
 .sync{position:fixed;top:0;left:0;right:0;background:var(--accent);color:#fff;
   text-align:center;padding:5px;font-size:12px;z-index:60}
 
+/* ---------- перетаскивание плиток на панели ---------- */
+.tile-ghost{position:fixed;z-index:80;pointer-events:none;
+  transform:translate(-50%,-50%) scale(1.12);opacity:.96;
+  filter:drop-shadow(0 12px 24px rgba(0,0,0,.65))}
+.tile.drag-src{opacity:.3}
+.tile.drop-ok .tile-icon{box-shadow:0 0 0 3px #fff}
+.tile.drop-ok .tile-name{color:var(--text)}
+body.dragging-mode{user-select:none;-webkit-user-select:none}
+.drag-hint{position:fixed;left:50%;transform:translateX(-50%);
+  bottom:calc(170px + var(--safe-b));background:var(--surface2);color:var(--text);
+  padding:9px 16px;border-radius:20px;font-size:14px;z-index:81;pointer-events:none;
+  white-space:nowrap;box-shadow:0 6px 18px rgba(0,0,0,.5)}
+
 /* ---------- перетаскивание ---------- */
 .drag-list{margin:0 -4px}
 .drag-row{display:flex;align-items:center;gap:12px;padding:10px 4px;
