@@ -152,6 +152,19 @@ function setS(patch){ Object.assign(S, typeof patch === 'function' ? patch(S) : 
 // Разряды разделяем сами: встроенный Intl на разных устройствах
 // группирует четырёхзначные числа по-разному, и 1000 могло остаться слитным.
 // U+00A0 — обычный неразрывный пробел: есть в любом шрифте, число не переносится.
+// Приводим введённую строку к числу: пробелы-разделители и запятая не должны мешать
+const toNum = v => Number(String(v ?? '').replace(/\s|\u00A0/g,'').replace(',','.')) || 0;
+
+// Группировка для полей ввода: работает со строкой, а не с числом,
+// поэтому не мешает набирать и стирать цифры
+function groupDigits(str){
+  const raw = String(str ?? '');
+  const neg = raw.trim().startsWith('-');
+  const digits = raw.replace(/\D/g,'');
+  if(!digits) return neg ? '-' : '';
+  return (neg ? '-' : '') + digits.replace(/\B(?=(\d{3})+(?!\d))/g, '\u00A0');
+}
+
 function fmt(n){
   const v = Math.round(Number(n) || 0);
   const body = String(Math.abs(v)).replace(/\B(?=(\d{3})+(?!\d))/g, '\u00A0');
@@ -367,7 +380,7 @@ function chunk(arr, n){
 }
 
 // Секция панели: плитки разложены по страницам, лишние листаются вбок
-function sectionHTML(key, title, sum, items, maxRows){
+function sectionHTML(key, title, sum, items, maxRows, note=''){
   const open = S.open[key];
   const perPage = maxRows * 4;
   const pages = chunk(items, perPage);
@@ -378,7 +391,10 @@ function sectionHTML(key, title, sum, items, maxRows){
     <button class="sec-name" data-toggle="${key}">
       <span class="chev${open?'':' closed'}">▾</span>${title}
     </button>
-    <span class="sec-sum">${fmt(sum)} ${mainSign()}</span>
+    <div style="text-align:right">
+      <div class="sec-sum">${fmt(sum)} ${mainSign()}</div>
+      ${note ? `<div style="font-size:11px;color:var(--dim);margin-top:2px">${note}</div>` : ''}
+    </div>
   </div>
   ${open ? `<div class="tile-box">
     <div class="pager" data-pager="${key}">
@@ -404,10 +420,17 @@ function viewPanel(){
   const walTiles = ws.map(w =>
     tileHTML(w.id, w.name, w.icon, w.color, walletBalance(w.id), 'wallet'));
 
-  // Долги — это обязательства, а не деньги в кармане, поэтому в итог не идут
+  // Долги входят в итог: одолженные деньги ушли с карты, но не исчезли,
+  // а взятые в долг лежат на карте, хотя и не твои. Иначе состояние скачет
+  // при каждом займе, хотя на деле не меняется.
   const walTotal = myWallets()
-    .filter(w => !isDebtWallet(w))
     .reduce((s,w) => s + toKZT(walletBalance(w.id), w.currency), 0);
+  const cash = myWallets().filter(w => !isDebtWallet(w))
+    .reduce((s,w) => s + toKZT(walletBalance(w.id), w.currency), 0);
+  const debts = walTotal - cash;
+  const walNote = debts
+    ? `на руках ${fmt(cash)}, ${debts > 0 ? 'должны вам' : 'ваш долг'} ${fmt(Math.abs(debts))}`
+    : '';
 
   return `
   <div class="top">
@@ -417,7 +440,7 @@ function viewPanel(){
   </div>
   <div class="wrap">
     ${sectionHTML('income','Доходы', sumOf('income'), [...incTiles, addTileHTML('income')], 1)}
-    ${sectionHTML('wallets','Кошельки', walTotal, [...walTiles, addTileHTML('wallets')], 1)}
+    ${sectionHTML('wallets','Кошельки', walTotal, [...walTiles, addTileHTML('wallets')], 1, walNote)}
     ${sectionHTML('expense','Расходы', sumOf('expense'), [...expTiles, addTileHTML('expense')], 3)}
     ${!parents('expense').length ? '<div class="empty">Категорий пока нет.<br>Добавьте их в настройках.</div>' : ''}
   </div>`;
@@ -626,8 +649,8 @@ function viewReport(){
           ${kind==='expense' ? `<div style="display:flex;align-items:center;gap:8px;margin-top:8px">
             <span style="font-size:12px;color:${over?'var(--red)':'var(--muted)'}">
               ${bud ? (over ? `превышен на ${fmt(it.value-bud)}` : `из ${fmt(bud)} ${mainSign()}`) : 'лимит не задан'}</span>
-            <input class="inp budget-inp" data-cat="${it.id}" type="number" inputmode="decimal"
-              placeholder="лимит" value="${bud||''}"
+            <input class="inp budget-inp num-inp" data-cat="${it.id}" type="text" inputmode="numeric"
+              placeholder="лимит" value="${groupDigits(bud)}"
               style="margin-left:auto;width:110px;padding:7px 10px;font-size:13px;text-align:right"/>
           </div>` : ''}
         </div>`;
@@ -884,8 +907,8 @@ function sheetOp(){
           `<button class="${s.type===k?'on':''}" data-op-type="${k}">${v}</button>`).join('')}
       </div>` : ''}
     </div>`, `
-    <input class="amount-in" id="opAmt" type="number" inputmode="decimal"
-      placeholder="0" value="${s.amount||''}" autocomplete="off"/>
+    <input class="amount-in num-inp" id="opAmt" type="text" inputmode="numeric"
+      placeholder="0" value="${groupDigits(s.amount)}" autocomplete="off"/>
     <div class="amount-lbl" style="margin:-10px 0 18px">Сумма</div>
 
     <div class="flow">
@@ -912,8 +935,8 @@ function sheetOp(){
 
     ${isTransfer && wFrom && wTo && wFrom.currency !== wTo.currency ? `
       <div class="field-l">Сколько придёт в ${esc(wTo.name)} (${wTo.currency})</div>
-      <input class="inp" id="opAmtTo" type="number" inputmode="decimal"
-        placeholder="сумма зачисления" value="${s.amountTo||''}" style="margin-bottom:18px"/>` : ''}
+      <input class="inp num-inp" id="opAmtTo" type="text" inputmode="numeric"
+        placeholder="сумма зачисления" value="${groupDigits(s.amountTo)}" style="margin-bottom:18px"/>` : ''}
 
     <button class="field-l" id="dateBtn" style="color:var(--accent);display:block">🗓 Дата</button>
     ${s.dateOpen
@@ -1011,7 +1034,7 @@ function sheetWallets(){
         ${CURRENCIES.map(c => `<button class="chip${e.currency===c.code?' on':''}" data-w-cur="${c.code}">${c.code}</button>`).join('')}
       </div>
       <div class="field-l">Текущий остаток</div>
-      <input class="inp" id="wBal" type="number" inputmode="decimal" value="${e.displayBalance}" style="margin-bottom:8px"/>
+      <input class="inp num-inp" id="wBal" type="text" inputmode="numeric" value="${groupDigits(e.displayBalance)}" style="margin-bottom:8px"/>
       <div style="color:var(--dim);font-size:13px;margin-bottom:14px;line-height:1.5">
         Впишите реальную сумму на счёте. Разницу с посчитанной по операциям приложение запомнит как стартовый остаток.
       </div>
@@ -1259,8 +1282,8 @@ function viewDebtForm(){
         `<button class="chip${s.debtDir===k?' on':''}" data-debt-dir="${k}">${v.label}</button>`).join('')}
     </div>
 
-    <input class="amount-in" id="debtAmt" type="number" inputmode="decimal"
-      placeholder="0" value="${s.amount||''}"/>
+    <input class="amount-in num-inp" id="debtAmt" type="text" inputmode="numeric"
+      placeholder="0" value="${groupDigits(s.amount)}"/>
     <div class="amount-lbl" style="margin:-10px 0 18px">Сумма</div>
 
     <div class="field-l">Кто</div>
@@ -1404,12 +1427,29 @@ function openOpSheet(patch = {}){
 function readOpInputs(){
   const s = S.sheet;
   if(!s || s.mode !== 'op') return;
-  s.amount   = $('#opAmt')?.value ?? s.amount;
+  s.amount   = $('#opAmt') ? toNum($('#opAmt').value) : s.amount;
   s.note     = $('#opNote')?.value ?? s.note;
   s.date     = $('#opDate')?.value || s.date;
-  s.amountTo = $('#opAmtTo')?.value ?? s.amountTo;
+  s.amountTo = $('#opAmtTo') ? toNum($('#opAmtTo').value) : s.amountTo;
 }
 const patchSheet = patch => { readOpInputs(); setS({sheet:{...S.sheet, ...patch}}); };
+
+// Расставляет пробелы прямо во время набора. Курсор возвращаем на место
+// по числу цифр слева от него, иначе он прыгал бы в конец при каждом символе.
+function bindNumInputs(){
+  $$('.num-inp').forEach(inp => {
+    inp.oninput = () => {
+      const before = String(inp.value).slice(0, inp.selectionStart ?? 0).replace(/\D/g,'').length;
+      inp.value = groupDigits(inp.value);
+      let seen = 0, pos = 0;
+      while(pos < inp.value.length && seen < before){
+        if(/\d/.test(inp.value[pos])) seen++;
+        pos++;
+      }
+      try { inp.setSelectionRange(pos, pos); } catch {}
+    };
+  });
+}
 
 function bind(){
   // --- навигация ---
@@ -1469,11 +1509,12 @@ function bind(){
 
   // --- бюджеты ---
   $$('.budget-inp').forEach(inp => {
-    inp.onchange = () => { setBudget(inp.dataset.cat, Number(inp.value) || 0); render(); };
+    inp.onchange = () => { setBudget(inp.dataset.cat, toNum(inp.value)); render(); };
     inp.onkeydown = e => { if(e.key === 'Enter') inp.blur(); };
   });
 
   bindSheet();
+  bindNumInputs();
 }
 
 function renderKeepFocus(){
@@ -1491,7 +1532,7 @@ function openDebtForm(patch = {}){
 function readDebtInputs(){
   const s = S.sheet;
   if(!s || s.mode !== 'debtForm') return;
-  s.amount = $('#debtAmt')?.value ?? s.amount;
+  s.amount = $('#debtAmt') ? toNum($('#debtAmt').value) : s.amount;
   s.person = $('#debtPerson')?.value ?? s.person;
   s.note   = $('#debtNote')?.value ?? s.note;
   s.date   = $('#debtDate')?.value || s.date;
@@ -1649,7 +1690,7 @@ function bindSheet(){
   const readWallet = () => ({
     name: $('#wName')?.value ?? S.sheet.edit.name,
     icon: $('#wIcon')?.value ?? S.sheet.edit.icon,
-    displayBalance: $('#wBal')?.value ?? S.sheet.edit.displayBalance,
+    displayBalance: $('#wBal') ? toNum($('#wBal').value) : S.sheet.edit.displayBalance,
   });
   on('[data-w-cur]', el => setS({sheet:{...S.sheet, edit:{...S.sheet.edit, ...readWallet(), currency: el.dataset.wCur}}}));
   on('[data-w-kind]', el => setS({sheet:{...S.sheet, edit:{...S.sheet.edit, ...readWallet(), kind: el.dataset.wKind}}}));
