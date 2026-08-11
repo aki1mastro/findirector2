@@ -976,6 +976,8 @@ function renderSheet(){
 
 function render(){
   const root = document.getElementById('app');
+  // Если жест оборвался нештатно, копия плитки могла остаться висеть поверх экрана
+  document.querySelectorAll('.tile-ghost, .drag-hint').forEach(el => el.remove());
   if(!S.authReady){
     root.innerHTML = '<div class="empty" style="padding-top:40vh">Проверяем вход…</div>';
     return;
@@ -1339,6 +1341,7 @@ function bindTileDrag(){
       if(e.button && e.button !== 0) return;
       const meta = tileMeta(tile);
       if(!meta) return;
+      cleanupDrag();                       // вдруг прошлый жест не завершился
       drag = {tile, meta, x:e.clientX, y:e.clientY, startX:e.clientX, startY:e.clientY,
               armed:false, ghost:null, hint:null, target:null, pairing:null,
               timer: setTimeout(() => armDrag(), LONG_PRESS)};
@@ -1352,6 +1355,11 @@ function bindTileDrag(){
   document.addEventListener('pointercancel', cancelDrag);
   // iOS начинает прокрутку сама — глушим её, пока идёт жест
   document.addEventListener('touchmove', preventWhileDragging, {passive:false});
+  // Страховка: если система перехватила жест, событие отпускания может не прийти
+  document.addEventListener('touchend', onDragEnd);
+  document.addEventListener('touchcancel', cancelDrag);
+  window.addEventListener('blur', cancelDrag);
+  document.addEventListener('visibilitychange', () => { if(document.hidden) cancelDrag(); });
 }
 
 function preventWhileDragging(e){ if(drag && drag.armed) e.preventDefault(); }
@@ -1368,6 +1376,9 @@ function armDrag(){
   ghost.style.top  = drag.y + 'px';
   document.body.appendChild(ghost);
   drag.ghost = ghost;
+
+  // Последний рубеж: жест не может длиться вечно
+  drag.deadline = setTimeout(cancelDrag, 20000);
 
   if(navigator.vibrate) navigator.vibrate(12);
 }
@@ -1440,12 +1451,15 @@ function cancelDrag(){ if(drag){ cleanupDrag(); } }
 function cleanupDrag(){
   if(!drag) return;
   clearTimeout(drag.timer);
+  clearTimeout(drag.deadline);
   if(drag.ghost) drag.ghost.remove();
   if(drag.hint) drag.hint.remove();
   if(drag.target) drag.target.classList.remove('drop-ok');
   drag.tile.classList.remove('drag-src');
   document.body.classList.remove('dragging-mode');
   drag = null;
+  // на случай, если копия осталась от прерванного жеста
+  document.querySelectorAll('.tile-ghost, .drag-hint').forEach(el => el.remove());
 }
 
 // ==================== ПЕРЕТАСКИВАНИЕ ====================
