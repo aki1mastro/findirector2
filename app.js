@@ -97,6 +97,7 @@ const EXPENSE_TREE = [
 
 // sub — подкатегории, создаются вместе с родителем
 // Номер версии набора: увеличивается, если структура категорий меняется
+const APP_VERSION = 25;   // видно в настройках — так проверяем, обновился ли файл
 const TREE_VERSION = 4;
 
 const DEF_EXP = EXPENSE_TREE.map(n => ({n:n.n, i:n.i, c:n.c, sub:n.sub}));
@@ -780,7 +781,9 @@ function viewSettings(){
     </div>
 
     <div style="text-align:center;color:var(--dim);font-size:13px;padding:8px 0 20px">
-      ФинДиректор 2 · операций в базе: ${S.ops.filter(o=>o.profileId===S.profileId).length}
+      ФинДиректор 2 · версия ${APP_VERSION}<br>
+      операций в базе: ${S.ops.filter(o=>o.profileId===S.profileId).length},
+      из них долгов: ${debtOps().length}
     </div>
   </div>`;
 }
