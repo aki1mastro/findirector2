@@ -84,13 +84,11 @@ const EXPENSE_TREE = [
   {n:'Одежда и стиль', i:'👔', c:'#ffd60a',
    sub:['Одежда','Обувь','Аксессуары']},
   {n:'Развлечения и досуг', i:'🎮', c:'#af52de',
-   sub:['Кино/Театр/Выставки','Хобби и развитие','Подписки','Путешествия']},
-  {n:'Сабина', i:'💕', c:'#ff9ecd',
-   sub:['Салон и уход','Одежда и украшения','Совместный досуг','Цветы и подарки']},
+   sub:['Кино/Театр/Выставки','Хобби и развитие','Подписки','Путешествия','Совместный досуг']},
   {n:'Семья и родные', i:'👑', c:'#3b46d4',
    sub:['Родителям','Братья и сёстры','Поездки к своим']},
-  {n:'Той и традиции', i:'🎉', c:'#ff6b35',
-   sub:['Коримдік','Сүйінші','Ас/Дастархан','Подарки на той']},
+  {n:'Праздники и подарки', i:'🎉', c:'#ff6b35',
+   sub:['Той','Коримдік','Сүйінші','Ас/Дастархан','Цветы и подарки','День рождения']},
   {n:'Свадьба', i:'💍', c:'#ff2d55',
    sub:['Тойхана','Наряды','Кольца','Фото и видео','Ведущий и музыка']},
   {n:'Вахта', i:'⛏', c:'#32ade6',
@@ -101,7 +99,7 @@ const EXPENSE_TREE = [
 
 // sub — подкатегории, создаются вместе с родителем
 // Номер версии набора: увеличивается, если структура категорий меняется
-const TREE_VERSION = 2;
+const TREE_VERSION = 3;
 
 const DEF_EXP = EXPENSE_TREE.map(n => ({n:n.n, i:n.i, c:n.c, sub:n.sub}));
 
@@ -481,7 +479,7 @@ function viewHistory(){
         <div class="op-main">
           <div class="op-title">${esc(opTitle(o))}</div>
           ${o.type!=='transfer' && w ? `<div class="op-wallet">${esc(w.name)}</div>` : ''}
-          ${o.note ? `<div class="op-note">${esc(o.note)}</div>` : ''}
+          ${o.who || o.note ? `<div class="op-note">${o.who ? '· '+esc(o.who) : ''}${o.who && o.note ? ' · ' : ''}${esc(o.note||'')}</div>` : ''}
         </div>
         <div class="op-amt" style="color:${col}">${pre}${fmt(o.amount)} ${mainSign()}</div>
       </button>`;
@@ -561,7 +559,41 @@ function viewReport(){
   const budgetSum = parents('expense').reduce((s,c)=> s + budgetOf(c.id), 0);
 
   let body;
-  if(kind === 'both'){
+  if(kind === 'people'){
+    const byWho = {};
+    monthOps().filter(o => o.type === 'expense').forEach(o => {
+      const key = o.who || '__self';
+      byWho[key] = (byWho[key] || 0) + o.amount;
+    });
+    const items = Object.entries(byWho)
+      .map(([k,v]) => ({name: k === '__self' ? 'На себя' : k, value: v, self: k === '__self'}))
+      .sort((a,b) => b.value - a.value);
+    const total = items.reduce((s,i) => s + i.value, 0);
+    const onOthers = items.filter(i => !i.self).reduce((s,i) => s + i.value, 0);
+
+    body = `
+    <div class="stat-3">
+      <div><div class="stat-l">Всего</div><div class="stat-v">${fmt(total)} ${mainSign()}</div></div>
+      <div><div class="stat-l">На других</div>
+        <div class="stat-v" style="color:var(--accent)">${fmt(onOthers)} ${mainSign()}</div></div>
+      <div><div class="stat-l">Доля</div>
+        <div class="stat-v">${total ? Math.round(onOthers/total*100) : 0}%</div></div>
+    </div>
+    <div class="card">
+      <div style="font-size:19px;font-weight:800;margin-bottom:6px">Кому уходят деньги</div>
+      ${items.length ? items.map(it => {
+        const pct = total ? it.value/total*100 : 0;
+        return `<div class="legend" style="display:block">
+          <div style="display:flex;align-items:center;gap:10px">
+            <div style="flex:1;font-size:15px${it.self?';color:var(--muted)':''}">${esc(it.name)}</div>
+            <div style="font-weight:700;font-size:15px">${fmt(it.value)} ${mainSign()}</div>
+            <div style="color:var(--muted);font-size:13px;width:46px;text-align:right">${pct.toFixed(1)}%</div>
+          </div>
+          <div class="bar"><div class="bar-fill" style="width:${pct}%;background:${it.self?'var(--dim)':'var(--accent)'}"></div></div>
+        </div>`;
+      }).join('') : '<div class="empty">Пока никому.<br>Отмечайте траты полем «для кого».</div>'}
+    </div>`;
+  } else if(kind === 'both'){
     const inc = build('income'), exp = build('expense');
     const max = Math.max(inc.sum, exp.sum, 1);
     body = `
@@ -627,6 +659,7 @@ function viewReport(){
       <button class="${kind==='income'?'on':''}" data-report="income">Доходы</button>
       <button class="${kind==='expense'?'on':''}" data-report="expense">Расходы</button>
       <button class="${kind==='both'?'on':''}" data-report="both">Вместе</button>
+      <button class="${kind==='people'?'on':''}" data-report="people">Люди</button>
     </div>
     <div style="display:flex;align-items:center;justify-content:center;gap:18px;margin-bottom:16px">
       <button id="prevMonth" style="color:var(--muted);font-size:22px;padding:4px 10px">‹</button>
@@ -908,6 +941,18 @@ function sheetOp(){
     <div class="field-l">Комментарий</div>
     <input class="inp" id="opNote" placeholder="необязательно" value="${esc(s.note||'')}"/>
 
+    ${!isTransfer ? `
+      <div class="field-l" style="margin-top:16px">Для кого</div>
+      <div class="chips" style="margin-bottom:10px">
+        <button class="chip${!s.who?' on':''}" data-op-who="">Себе</button>
+        ${knownPeople().map(n => `<button class="chip${s.who===n?' on':''}" data-op-who="${esc(n)}">${esc(n)}</button>`).join('')}
+      </div>
+      <input class="inp" id="opWho" placeholder="или впишите имя" value="${esc(s.who||'')}"/>
+      <div style="color:var(--dim);font-size:12px;margin-top:6px;line-height:1.5">
+        Категория отвечает на «на что», это поле — на «кому». Цветы Сабине останутся
+        подарками и заодно попадут в её итог.
+      </div>` : ''}
+
     <div class="switch-row">
       <div class="switch${s.keepOpen ? ' on' : ''}" id="keepOpen"><i></i></div>
       <div style="font-size:16px">Добавить ещё операцию</div>
@@ -1131,6 +1176,15 @@ const DEBT_DIR = {
 };
 
 const debtOps = () => S.ops.filter(o => o.profileId === S.profileId && o.type === 'debt');
+
+// Имена, которые уже встречались: и в тратах «для кого», и в долгах
+function knownPeople(){
+  const names = S.ops
+    .filter(o => o.profileId === S.profileId)
+    .map(o => o.who || o.person)
+    .filter(Boolean);
+  return [...new Set(names)].sort((a,b) => a.localeCompare(b,'ru'));
+}
 
 // Плюс — должны мне, минус — должен я
 function personBalance(name){
@@ -1378,7 +1432,7 @@ function openOpSheet(patch = {}){
   setS({sheet:{
     mode:'op', type:'expense', id:null, amount:'', catId:null,
     walletId: def, toWalletId: (ws.find(w => w.id !== def) || {}).id || null,
-    amountTo:'', note:'', date: localInput(new Date()),
+    amountTo:'', note:'', who:'', date: localInput(new Date()),
     keepOpen:false, typeOpen:false, dateOpen:false, picking:null, ...patch
   }});
 }
@@ -1389,6 +1443,7 @@ function readOpInputs(){
   s.note     = $('#opNote')?.value ?? s.note;
   s.date     = $('#opDate')?.value || s.date;
   s.amountTo = $('#opAmtTo')?.value ?? s.amountTo;
+  s.who      = $('#opWho')?.value ?? s.who;
 }
 const patchSheet = patch => { readOpInputs(); setS({sheet:{...S.sheet, ...patch}}); };
 
@@ -1432,7 +1487,7 @@ function bind(){
     if(!o) return;
     setS({sheet:{mode:'op', type:o.type, id:o.id, amount:o.amount, catId:o.catId,
       walletId:o.walletId, toWalletId:o.toWalletId, amountTo:o.amountTo||'',
-      note:o.note||'', date: localInput(new Date(o.date))}});
+      note:o.note||'', who:o.who||'', date: localInput(new Date(o.date))}});
   });
 
   // --- настройки (эти кнопки живут на экране, а не в листе) ---
@@ -1519,6 +1574,7 @@ function bindSheet(){
         ? (S.sheet.toWalletId || (myWallets().find(w => w.id !== S.sheet.walletId) || {}).id)
         : S.sheet.toWalletId});
   });
+  on('[data-op-who]', el => patchSheet({who: el.dataset.opWho}));
   on('[data-pick-cat]', el => patchSheet({catId: el.dataset.pickCat, picking: null}));
   on('[data-pick-wallet]', el => patchSheet({walletId: el.dataset.pickWallet, picking: null}));
   on('[data-pick-to]', el => patchSheet({toWalletId: el.dataset.pickTo, picking: null}));
@@ -1556,6 +1612,7 @@ function bindSheet(){
       toWalletId: s.type === 'transfer' ? s.toWalletId : null,
       amountTo: s.type === 'transfer' ? (Number(s.amountTo) || amount) : null,
       note: (s.note || '').trim(),
+      who: s.type === 'transfer' ? null : (s.who || '').trim() || null,
       date: new Date(s.date).toISOString(),
     };
     saveOp(data, s.id);
@@ -2138,7 +2195,7 @@ function bindPanelDrag(){
 // ==================== ЭКСПОРТ ====================
 
 function exportCsv(){
-  const rows = [['Дата','Тип','Категория','Подкатегория','Кошелёк','Сумма','Валюта','Примечание']];
+  const rows = [['Дата','Тип','Категория','Подкатегория','Кошелёк','Сумма','Валюта','Для кого','Примечание']];
   const typeName = {expense:'Расход', income:'Доход', transfer:'Перевод', debt:'Долг'};
   S.ops.filter(o => o.profileId === S.profileId)
     .slice().sort((a,b) => new Date(a.date) - new Date(b.date))
@@ -2154,6 +2211,7 @@ function exportCsv(){
         o.type === 'transfer' ? `${w?w.name:''} → ${wallet(o.toWalletId)?.name || ''}` : (w ? w.name : ''),
         o.amount,
         w ? w.currency : S.mainCurrency,
+        o.who || '',
         o.note || '',
       ]);
     });
