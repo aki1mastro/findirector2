@@ -686,72 +686,159 @@ function sheetWrap(title, inner, extraHead=''){
 }
 
 // ---- лист операции ----
+
+const TYPE_NAME = {expense:'Расход', income:'Доход', transfer:'Перевод'};
+
+function dateStripDays(selected){
+  const days = [];
+  const base = new Date();
+  base.setHours(0,0,0,0);
+  for(let i = 9; i >= 0; i--){
+    const d = new Date(base);
+    d.setDate(base.getDate() - i);
+    days.push(d);
+  }
+  // Если правим старую запись — показываем и её день
+  const sel = new Date(selected);
+  sel.setHours(0,0,0,0);
+  if(!days.some(d => d.getTime() === sel.getTime())) days.unshift(sel);
+  return days;
+}
+const dayKey = d => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+
+function withDate(iso, d){
+  const t = iso.slice(11) || '12:00';
+  const p = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${t}`;
+}
+
+// Выбор кошелька или категории — отдельный экран внутри листа
+function opPicker(){
+  const s = S.sheet;
+  if(s.picking === 'cat'){
+    const type = s.type === 'income' ? 'income' : 'expense';
+    return sheetWrap('Категория', `
+      <div class="pick-grid" style="max-height:none">
+        ${parents(type).map(c => `
+          <button class="pick${(cat(s.catId)?.parentId || s.catId) === c.id ? ' on' : ''}" data-pick-cat="${c.id}">
+            <div class="pick-ic" style="background:${c.color}">${c.icon}</div>
+            <div class="pick-n">${esc(c.name)}</div>
+          </button>`).join('')}
+      </div>`, `<button class="x" id="pickBack">‹</button>`);
+  }
+  const field = s.picking;   // 'wallet' | 'to'
+  const cur = field === 'to' ? s.toWalletId : s.walletId;
+  return sheetWrap(field === 'to' ? 'Куда' : 'Кошелёк', `
+    <div class="pick-grid" style="max-height:none">
+      ${myWallets().map(w => `
+        <button class="pick${cur === w.id ? ' on' : ''}" data-pick-${field === 'to' ? 'to' : 'wallet'}="${w.id}">
+          <div class="pick-ic" style="background:${w.color}">${w.icon}</div>
+          <div class="pick-n">${esc(w.name)}</div>
+        </button>`).join('')}
+    </div>`, `<button class="x" id="pickBack">‹</button>`);
+}
+
 function sheetOp(){
   const s = S.sheet;
-  const type = s.type;
-  const ws = myWallets();
-  const isTransfer = type === 'transfer';
+  if(s.picking) return opPicker();
 
-  const roots = parents(type === 'income' ? 'income' : 'expense');
+  const isTransfer = s.type === 'transfer';
   const chosen = s.catId ? cat(s.catId) : null;
   const rootId = chosen ? (chosen.parentId || chosen.id) : null;
+  const root = rootId ? cat(rootId) : null;
   const subs = rootId ? childrenOf(rootId) : [];
 
-  const catGrid = roots.map(c => `
-    <button class="pick${rootId===c.id?' on':''}" data-pick-cat="${c.id}">
-      <div class="pick-ic" style="background:${c.color}">${c.icon}</div>
-      <div class="pick-n">${esc(c.name)}</div>
-    </button>`).join('');
+  const wFrom = wallet(s.walletId);
+  const wTo   = wallet(s.toWalletId);
 
-  const subChips = subs.length ? `
-    <div class="field-l" style="margin-top:14px">Уточнение</div>
-    <div class="chips">
-      <button class="chip${s.catId===rootId?' on':''}" data-pick-cat="${rootId}">Без уточнения</button>
-      ${subs.map(sc => `<button class="chip${s.catId===sc.id?' on':''}" data-pick-cat="${sc.id}">${esc(sc.name)}</button>`).join('')}
-    </div>` : '';
+  // Левый и правый кружок и направление стрелки зависят от типа операции
+  const left = isTransfer
+    ? {label:'Откуда', name: wFrom ? wFrom.name : 'Выберите кошелёк',
+       icon: wFrom ? wFrom.icon : '?', color: wFrom ? wFrom.color : '', pick:'wallet'}
+    : {label:'Кошелёк', name: wFrom ? wFrom.name : 'Выберите кошелёк',
+       icon: wFrom ? wFrom.icon : '?', color: wFrom ? wFrom.color : '', pick:'wallet'};
+  const right = isTransfer
+    ? {label:'Куда', name: wTo ? wTo.name : 'Выберите кошелёк',
+       icon: wTo ? wTo.icon : '?', color: wTo ? wTo.color : '', pick:'to'}
+    : {label:'Категория', name: root ? root.name : 'Выберите категорию',
+       icon: root ? root.icon : '?', color: root ? root.color : '', pick:'cat'};
+  const arrow = s.type === 'income' ? '«' : '»';
 
-  const walletChips = list => list.map(w =>
-    `<button class="chip${s.walletId===w.id?' on':''}" data-pick-wallet="${w.id}">${w.icon} ${esc(w.name)}</button>`).join('');
+  const circle = side => `
+    <div class="flow-side">
+      <div class="flow-l">${side.label}</div>
+      <div class="flow-n">${esc(side.name)}</div>
+      <button class="flow-circle${side.color ? ' set' : ''}"
+        style="${side.color ? `background:${side.color};color:${side.color}` : ''}"
+        data-open-pick="${side.pick}">${side.icon}</button>
+    </div>`;
 
-  return sheetWrap(s.id ? 'Изменить операцию' : 'Новая операция', `
-    <div class="seg">
-      <button class="${type==='expense'?'on':''}" data-op-type="expense">Расход</button>
-      <button class="${type==='income'?'on':''}" data-op-type="income">Доход</button>
-      <button class="${type==='transfer'?'on':''}" data-op-type="transfer">Перевод</button>
-    </div>
+  const selDay = dayKey(new Date(s.date));
+  const dateChips = dateStripDays(s.date).map(d => {
+    const k = dayKey(d);
+    const now = new Date(); now.setHours(0,0,0,0);
+    const diff = Math.round((now - d) / 86400000);
+    const w = diff === 0 ? 'Сегодня' : diff === 1 ? 'Вчера' : DOW[d.getDay()];
+    return `<button class="date-chip${k === selDay ? ' on' : ''}" data-pick-day="${d.getFullYear()}-${d.getMonth()}-${d.getDate()}">
+      <div class="d">${String(d.getDate()).padStart(2,'0')}</div>
+      <div class="m">${MONTHS_GEN[d.getMonth()]}</div>
+      <div class="w${diff <= 1 ? ' hot' : ''}">${w}</div>
+    </button>`;
+  }).join('');
 
+  return sheetWrap(`
+    <div style="position:relative">
+      <button class="type-btn" id="typeBtn">${TYPE_NAME[s.type]} ▾</button>
+      ${s.typeOpen ? `<div class="type-list">
+        ${Object.entries(TYPE_NAME).map(([k,v]) =>
+          `<button class="${s.type===k?'on':''}" data-op-type="${k}">${v}</button>`).join('')}
+      </div>` : ''}
+    </div>`, `
     <input class="amount-in" id="opAmt" type="number" inputmode="decimal"
       placeholder="0" value="${s.amount||''}" autocomplete="off"/>
+    <div class="amount-lbl" style="margin:-10px 0 18px">Сумма</div>
 
-    ${isTransfer ? `
-      <div class="field-l">Откуда</div>
-      <div class="chips" style="margin-bottom:14px">${walletChips(ws)}</div>
-      <div class="field-l">Куда</div>
-      <div class="chips" style="margin-bottom:14px">
-        ${ws.map(w => `<button class="chip${s.toWalletId===w.id?' on':''}" data-pick-to="${w.id}">${w.icon} ${esc(w.name)}</button>`).join('')}
-      </div>
-      ${(() => {
-        const a = wallet(s.walletId), b = wallet(s.toWalletId);
-        return a && b && a.currency !== b.currency ? `
-          <div class="field-l">Сколько придёт в ${esc(b.name)} (${b.currency})</div>
-          <input class="inp" id="opAmtTo" type="number" inputmode="decimal"
-            placeholder="сумма зачисления" value="${s.amountTo||''}" style="margin-bottom:14px"/>` : '';
-      })()}
-    ` : `
-      <div class="field-l">Категория</div>
-      <div class="pick-grid">${catGrid}</div>
-      ${subChips}
-      <div class="field-l" style="margin-top:14px">Кошелёк</div>
-      <div class="chips" style="margin-bottom:14px">${walletChips(ws)}</div>
-    `}
+    <div class="flow">
+      ${circle(left)}
+      <div class="flow-arrow">${arrow}${arrow}</div>
+      ${circle(right)}
+    </div>
 
-    <div class="field-l">Примечание</div>
-    <input class="inp" id="opNote" placeholder="необязательно" value="${esc(s.note||'')}" style="margin-bottom:14px"/>
+    ${!isTransfer && root ? `
+      <div class="field-l">Подкатегория</div>
+      <div class="sub-tiles" style="margin-bottom:18px">
+        <button class="sub-tile${s.catId === rootId ? ' on' : ''}" data-pick-cat="${rootId}">
+          <div class="big">?</div><div class="cap">без</div>
+        </button>
+        ${subs.map(sc => `
+          <button class="sub-tile${s.catId === sc.id ? ' on' : ''}" data-pick-cat="${sc.id}">
+            <div class="big">${esc(sc.name[0].toUpperCase())}</div>
+            <div class="cap">${esc(sc.name)}</div>
+          </button>`).join('')}
+        <button class="sub-tile" data-add-sub="${rootId}">
+          <div class="big">+</div><div class="cap">Добавить</div>
+        </button>
+      </div>` : ''}
 
-    <div class="field-l">Дата и время</div>
-    <input class="inp" id="opDate" type="datetime-local" value="${s.date}" style="margin-bottom:18px"/>
+    ${isTransfer && wFrom && wTo && wFrom.currency !== wTo.currency ? `
+      <div class="field-l">Сколько придёт в ${esc(wTo.name)} (${wTo.currency})</div>
+      <input class="inp" id="opAmtTo" type="number" inputmode="decimal"
+        placeholder="сумма зачисления" value="${s.amountTo||''}" style="margin-bottom:18px"/>` : ''}
 
-    <button class="btn" id="saveOp">${s.id ? 'Сохранить' : 'Добавить'}</button>
+    <button class="field-l" id="dateBtn" style="color:var(--accent);display:block">🗓 Дата</button>
+    ${s.dateOpen
+      ? `<input class="inp" id="opDate" type="datetime-local" value="${s.date}" style="margin-bottom:18px"/>`
+      : `<div class="date-strip" style="margin-bottom:18px">${dateChips}</div>`}
+
+    <div class="field-l">Комментарий</div>
+    <input class="inp" id="opNote" placeholder="необязательно" value="${esc(s.note||'')}"/>
+
+    <div class="switch-row">
+      <div class="switch${s.keepOpen ? ' on' : ''}" id="keepOpen"><i></i></div>
+      <div style="font-size:16px">Добавить ещё операцию</div>
+    </div>
+
+    <button class="btn" id="saveOp">${s.id ? 'Сохранить' : 'Сохранить'}</button>
     ${s.id ? `<button class="btn danger" id="deleteOp" style="margin-top:8px">Удалить операцию</button>` : ''}
   `);
 }
@@ -1021,12 +1108,19 @@ const $  = sel => document.querySelector(sel);
 const $$ = sel => Array.from(document.querySelectorAll(sel));
 const on = (sel, fn) => $$(sel).forEach(el => el.onclick = () => fn(el));
 
+function lastUsedWallet(){
+  const last = S.ops.find(o => o.profileId === S.profileId && o.walletId && wallet(o.walletId));
+  return last ? last.walletId : (myWallets()[0]?.id || null);
+}
+
 function openOpSheet(patch = {}){
   const ws = myWallets();
+  const def = lastUsedWallet();
   setS({sheet:{
     mode:'op', type:'expense', id:null, amount:'', catId:null,
-    walletId: ws[0]?.id || null, toWalletId: ws[1]?.id || null,
-    amountTo:'', note:'', date: localInput(new Date()), ...patch
+    walletId: def, toWalletId: (ws.find(w => w.id !== def) || {}).id || null,
+    amountTo:'', note:'', date: localInput(new Date()),
+    keepOpen:false, typeOpen:false, dateOpen:false, picking:null, ...patch
   }});
 }
 function readOpInputs(){
@@ -1113,14 +1207,39 @@ function bindSheet(){
     const amt = $('#opAmt');
     if(amt) setTimeout(() => amt.focus(), 60);
   }
+  on('#typeBtn', () => patchSheet({typeOpen: !S.sheet.typeOpen}));
+  on('#dateBtn', () => patchSheet({dateOpen: !S.sheet.dateOpen}));
+  on('#keepOpen', () => patchSheet({keepOpen: !S.sheet.keepOpen}));
+  on('#pickBack', () => patchSheet({picking: null}));
+  on('[data-open-pick]', el => patchSheet({picking: el.dataset.openPick}));
+  on('[data-pick-day]', el => {
+    const [y,m,d] = el.dataset.pickDay.split('-').map(Number);
+    patchSheet({date: withDate(S.sheet.date, new Date(y, m, d))});
+  });
+  on('[data-add-sub]', el => {
+    const parentId = el.dataset.addSub;
+    const name = prompt('Название подкатегории');
+    if(!name || !name.trim()) return;
+    const p = cat(parentId);
+    const data = {profileId:S.profileId, type:p.type, name:name.trim(),
+      icon:p.icon, color:p.color, parentId, order: childrenOf(parentId).length};
+    const id = fbAdd(COL.cats, data);
+    S.cats.push({...data, id});
+    patchSheet({catId: id});
+  });
   on('[data-op-type]', el => {
     const type = el.dataset.opType;
     const first = parents(type === 'income' ? 'income' : 'expense')[0];
-    patchSheet({type, catId: type === 'transfer' ? null : (first ? first.id : null)});
+    const keepCat = S.sheet.catId && cat(S.sheet.catId)?.type === type;
+    patchSheet({type, typeOpen:false,
+      catId: type === 'transfer' ? null : (keepCat ? S.sheet.catId : (first ? first.id : null)),
+      toWalletId: type === 'transfer'
+        ? (S.sheet.toWalletId || (myWallets().find(w => w.id !== S.sheet.walletId) || {}).id)
+        : S.sheet.toWalletId});
   });
-  on('[data-pick-cat]', el => patchSheet({catId: el.dataset.pickCat}));
-  on('[data-pick-wallet]', el => patchSheet({walletId: el.dataset.pickWallet}));
-  on('[data-pick-to]', el => patchSheet({toWalletId: el.dataset.pickTo}));
+  on('[data-pick-cat]', el => patchSheet({catId: el.dataset.pickCat, picking: null}));
+  on('[data-pick-wallet]', el => patchSheet({walletId: el.dataset.pickWallet, picking: null}));
+  on('[data-pick-to]', el => patchSheet({toWalletId: el.dataset.pickTo, picking: null}));
 
   on('#saveOp', () => {
     readOpInputs();
@@ -1131,7 +1250,10 @@ function bindSheet(){
       if(!s.walletId || !s.toWalletId || s.walletId === s.toWalletId){
         alert('Выберите два разных кошелька'); return;
       }
-    } else if(!s.catId){ alert('Выберите категорию'); return; }
+    } else {
+      if(!s.catId){ alert('Выберите категорию'); return; }
+      if(!s.walletId){ alert('Выберите кошелёк'); return; }
+    }
 
     const data = {
       type: s.type, amount,
@@ -1144,7 +1266,13 @@ function bindSheet(){
     };
     saveOp(data, s.id);
     const d = new Date(s.date);
-    setS({sheet:null, month:d.getMonth(), year:d.getFullYear()});
+    if(s.keepOpen && !s.id){
+      // Форма остаётся открытой: тип, кошелёк и категория те же, сумма чистая
+      setS({month:d.getMonth(), year:d.getFullYear(),
+        sheet:{...S.sheet, amount:'', note:'', amountTo:'', focusAmount:true}});
+    } else {
+      setS({sheet:null, month:d.getMonth(), year:d.getFullYear()});
+    }
   });
 
   on('#deleteOp', () => {
