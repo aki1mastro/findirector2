@@ -149,7 +149,14 @@ function setS(patch){ Object.assign(S, typeof patch === 'function' ? patch(S) : 
 
 // ============ утилиты ============
 
-const fmt = n => new Intl.NumberFormat('ru-RU').format(Math.round(Number(n)||0));
+// Разряды разделяем сами: встроенный Intl на разных устройствах
+// группирует четырёхзначные числа по-разному, и 1000 могло остаться слитным.
+// U+202F — узкий неразрывный пробел, число не переносится на другую строку.
+function fmt(n){
+  const v = Math.round(Number(n) || 0);
+  const body = String(Math.abs(v)).replace(/\B(?=(\d{3})+(?!\d))/g, '\u202F');
+  return (v < 0 ? '−' : '') + body;
+}
 const sign = code => (CURRENCIES.find(c=>c.code===code)||CURRENCIES[0]).sign;
 const mainSign = () => sign(S.mainCurrency);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);

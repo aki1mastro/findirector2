@@ -168,7 +168,7 @@ document.getElementById('step1').onclick = async () => {
     document.getElementById('stats').innerHTML = `
       <div><span class="dim">Операций</span><b>${old.expenses.length + old.incomes.length + old.transfers.length}</b></div>
       <div><span class="dim">Период</span><b style="font-size:15px">${from.toLocaleDateString('ru-RU')} — ${to.toLocaleDateString('ru-RU')}</b></div>
-      <div><span class="dim">Сумма расходов</span><b style="font-size:17px">${new Intl.NumberFormat('ru-RU').format(Math.round(sum))} ₸</b></div>
+      <div><span class="dim">Сумма расходов</span><b style="font-size:17px">${String(Math.round(sum)).replace(/\B(?=(\d{3})+(?!\d))/g,'\u202F')} ₸</b></div>
       <div><span class="dim">Уже перенесено</span><b>${fresh.ops.filter(o => o.fid.startsWith('imp_')).length}</b></div>`;
 
     say('\nГотово к переносу. Жмите шаг 2.', 'ok');

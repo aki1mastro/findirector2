@@ -2,7 +2,7 @@
 // Кэшируем только оболочку приложения. Данные кэширует сам Firestore (IndexedDB),
 // поэтому сюда запросы к googleapis намеренно НЕ попадают.
 
-const CACHE = 'findir2-v19';
+const CACHE = 'findir2-v20';
 const SHELL = [
   './',
   './index.html',
