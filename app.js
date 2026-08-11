@@ -151,10 +151,10 @@ function setS(patch){ Object.assign(S, typeof patch === 'function' ? patch(S) : 
 
 // Разряды разделяем сами: встроенный Intl на разных устройствах
 // группирует четырёхзначные числа по-разному, и 1000 могло остаться слитным.
-// U+202F — узкий неразрывный пробел, число не переносится на другую строку.
+// U+00A0 — обычный неразрывный пробел: есть в любом шрифте, число не переносится.
 function fmt(n){
   const v = Math.round(Number(n) || 0);
-  const body = String(Math.abs(v)).replace(/\B(?=(\d{3})+(?!\d))/g, '\u202F');
+  const body = String(Math.abs(v)).replace(/\B(?=(\d{3})+(?!\d))/g, '\u00A0');
   return (v < 0 ? '−' : '') + body;
 }
 const sign = code => (CURRENCIES.find(c=>c.code===code)||CURRENCIES[0]).sign;
