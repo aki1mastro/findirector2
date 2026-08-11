@@ -101,7 +101,7 @@ const EXPENSE_TREE = [
 
 // sub — подкатегории, создаются вместе с родителем
 // Номер версии набора: увеличивается, если структура категорий меняется
-const TREE_VERSION = 1;
+const TREE_VERSION = 2;
 
 const DEF_EXP = EXPENSE_TREE.map(n => ({n:n.n, i:n.i, c:n.c, sub:n.sub}));
 
@@ -243,13 +243,16 @@ async function loadAll(){
   // Разовое обновление структуры категорий для профилей, заведённых раньше.
   // Метка treeV на профиле не даёт повториться при следующих запусках.
   for(const p of S.profiles){
-    if(p.treeV === TREE_VERSION) continue;
     const prev = S.profileId;
     S.profileId = p.id;
-    applyExpenseTree();
+    dedupeCategories();                          // подчищаем следы прошлых гонок
+    if(p.treeV !== TREE_VERSION){
+      applyExpenseTree();
+      dedupeCategories();
+      p.treeV = TREE_VERSION;
+      fbUpd(COL.profiles, p.id, {treeV: TREE_VERSION});
+    }
     S.profileId = prev;
-    p.treeV = TREE_VERSION;
-    fbUpd(COL.profiles, p.id, {treeV: TREE_VERSION});
   }
 }
 
@@ -1765,6 +1768,41 @@ function applyExpenseTree(){
   S.cats = S.cats.filter(c => !doomedIds.has(c.id) && !doomedIds.has(c.parentId));
 
   return {added, removed, kept};
+}
+
+// Схлопывает категории с одинаковым названием на одном уровне.
+// Операции и подкатегории переезжают на выжившую, поэтому история не теряется.
+function dedupeCategories(){
+  const norm = s => (s||'').trim().toLowerCase();
+  let merged = 0;
+
+  const pass = roots => {
+    const seen = new Map();
+    S.cats
+      .filter(c => c.profileId === S.profileId && (roots ? !c.parentId : !!c.parentId))
+      .slice()
+      .sort((a,b) => String(a.id).localeCompare(String(b.id)))
+      .forEach(c => {
+        const key = `${c.type}|${c.parentId || ''}|${norm(c.name)}`;
+        const keep = seen.get(key);
+        if(!keep){ seen.set(key, c); return; }
+        S.ops.forEach(o => {
+          if(o.catId === c.id){ o.catId = keep.id; fbUpd(COL.ops, o.id, {catId: keep.id}); }
+        });
+        S.cats.forEach(k => {
+          if(k.parentId === c.id){ k.parentId = keep.id; fbUpd(COL.cats, k.id, {parentId: keep.id}); }
+        });
+        fbDel(COL.cats, c.id);
+        c.__dead = true;
+        merged++;
+      });
+  };
+
+  pass(true);                                    // сначала верхний уровень
+  S.cats = S.cats.filter(c => !c.__dead);
+  pass(false);                                   // затем подкатегории под общими родителями
+  S.cats = S.cats.filter(c => !c.__dead);
+  return merged;
 }
 
 // ==================== ПЕРЕТАСКИВАНИЕ ====================
