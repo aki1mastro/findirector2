@@ -1788,7 +1788,18 @@ function tileMeta(el){
 // Что получится, если бросить src на dst. null — сочетание бессмысленное.
 function pairing(src, dst){
   if(!src || !dst || src.id === dst.id) return null;
-  if(src.kind === 'debt' || dst.kind === 'debt') return null;   // долги оформляются в своём разделе
+
+  // Кошелёк на «Долги» — дал в долг, обратно — вернули мне
+  if(src.kind === 'debt' || dst.kind === 'debt'){
+    if(src.kind === 'debt' && dst.kind === 'wallet')
+      return {type:'debt', debtDir:'returned_to_me', walletId:dst.id,
+              hint:`Мне вернули — в ${dst.name}`};
+    if(src.kind === 'wallet' && dst.kind === 'debt')
+      return {type:'debt', debtDir:'lent', walletId:src.id,
+              hint:`Дал в долг с ${src.name}`};
+    return null;                       // категория и долги между собой не сочетаются
+  }
+
   const w = src.kind === 'wallet' ? src : dst.kind === 'wallet' ? dst : null;
   const other = w === src ? dst : src;
 
@@ -1917,7 +1928,11 @@ function onDragEnd(){
 
   if(pair){
     if(navigator.vibrate) navigator.vibrate(18);
-    openOpSheet({...pair, focusAmount:true});
+    if(pair.type === 'debt'){
+      setS({sheet: openDebtForm({debtDir: pair.debtDir, walletId: pair.walletId})});
+    } else {
+      openOpSheet({...pair, focusAmount:true});
+    }
   }
 }
 
