@@ -1110,8 +1110,40 @@ function renderSheet(){
 
 // ==================== СБОРКА ====================
 
+// Позиции прокрутки, которые надо пережить перерисовку
+function grabScroll(){
+  const body = document.getElementById('sheetBody');
+  const map = {};
+  document.querySelectorAll('.pager[data-pager]').forEach(p => map['pager:'+p.dataset.pager] = p.scrollLeft);
+  const sub = document.querySelector('.sub-tiles');
+  if(sub) map.sub = sub.scrollLeft;
+  const dates = document.querySelector('.date-strip');
+  if(dates) map.dates = dates.scrollLeft;
+  return {open: !!body, top: body ? body.scrollTop : 0, map};
+}
+
+function restoreScroll(prev){
+  const body = document.getElementById('sheetBody');
+  if(body && prev.open){
+    // Лист уже был открыт — не проигрываем выезд снизу заново
+    body.style.animation = 'none';
+    const bg = document.getElementById('sheetBg');
+    if(bg) bg.style.animation = 'none';
+    body.scrollTop = prev.top;
+  }
+  document.querySelectorAll('.pager[data-pager]').forEach(p => {
+    const v = prev.map['pager:'+p.dataset.pager];
+    if(v) p.scrollLeft = v;
+  });
+  const sub = document.querySelector('.sub-tiles');
+  if(sub && prev.map.sub) sub.scrollLeft = prev.map.sub;
+  const dates = document.querySelector('.date-strip');
+  if(dates && prev.map.dates) dates.scrollLeft = prev.map.dates;
+}
+
 function render(){
   const root = document.getElementById('app');
+  const prev = grabScroll();
   // Если жест оборвался нештатно, копия плитки могла остаться висеть поверх экрана
   document.querySelectorAll('.tile-ghost, .drag-hint').forEach(el => el.remove());
   if(!S.authReady){
@@ -1148,6 +1180,7 @@ function render(){
     </div></nav>
     ${renderSheet()}`;
 
+  restoreScroll(prev);
   bind();
 }
 // ==================== СОБЫТИЯ ====================
@@ -1272,10 +1305,6 @@ function bindSheet(){
   on('#keepOpen', () => patchSheet({keepOpen: !S.sheet.keepOpen}));
   on('#pickBack', () => patchSheet({picking: null}));
   on('[data-open-pick]', el => patchSheet({picking: el.dataset.openPick}));
-  on('[data-pick-day]', el => {
-    const [y,m,d] = el.dataset.pickDay.split('-').map(Number);
-    patchSheet({date: withDate(S.sheet.date, new Date(y, m, d))});
-  });
   on('[data-add-sub]', el => {
     const parentId = el.dataset.addSub;
     const name = prompt('Название подкатегории');
@@ -1300,6 +1329,18 @@ function bindSheet(){
   on('[data-pick-cat]', el => patchSheet({catId: el.dataset.pickCat, picking: null}));
   on('[data-pick-wallet]', el => patchSheet({walletId: el.dataset.pickWallet, picking: null}));
   on('[data-pick-to]', el => patchSheet({toWalletId: el.dataset.pickTo, picking: null}));
+
+  // Подкатегория и дата меняются прямо в DOM: лист не пересобирается,
+  // поэтому нет ни мигания, ни сброса прокрутки
+  $$('.sub-tile[data-pick-cat]').forEach(btn => btn.onclick = () => {
+    S.sheet.catId = btn.dataset.pickCat;
+    $$('.sub-tile[data-pick-cat]').forEach(b => b.classList.toggle('on', b === btn));
+  });
+  $$('.date-chip[data-pick-day]').forEach(btn => btn.onclick = () => {
+    const [y,m,d] = btn.dataset.pickDay.split('-').map(Number);
+    S.sheet.date = withDate(S.sheet.date, new Date(y, m, d));
+    $$('.date-chip[data-pick-day]').forEach(b => b.classList.toggle('on', b === btn));
+  });
 
   on('#saveOp', () => {
     readOpInputs();
